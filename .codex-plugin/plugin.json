@@ -1,25 +1,25 @@
 {
   "name": "nonprofit-explorer-mcp-server",
-  "version": "0.1.0",
-  "description": "",
+  "version": "0.1.1",
+  "description": "MCP server for US nonprofit financials via ProPublica — IRS Form 990 data for 1.8M+ tax-exempt organizations.",
   "author": {
-    "name": "",
-    "email": "",
-    "url": ""
+    "name": "cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
   },
-  "homepage": "",
-  "repository": "",
+  "homepage": "https://github.com/cyanheads/nonprofit-explorer-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/nonprofit-explorer-mcp-server",
   "license": "Apache-2.0",
-  "keywords": ["mcp", "mcp-server", "model-context-protocol"],
+  "keywords": ["mcp", "mcp-server", "model-context-protocol", "nonprofit", "propublica", "irs", "form-990", "tax-exempt"],
   "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
     "displayName": "nonprofit-explorer-mcp-server",
-    "shortDescription": "",
-    "longDescription": "",
-    "developerName": "",
-    "category": "",
+    "shortDescription": "MCP server for US nonprofit financials via ProPublica — IRS Form 990 data for 1.8M+ tax-exempt organizations.",
+    "longDescription": "Search and explore 1.8M+ US nonprofits, fetch Form 990 financials, and access IRS filing history via MCP. STDIO or Streamable HTTP.",
+    "developerName": "cyanheads",
+    "category": "data",
     "capabilities": ["Read"],
-    "websiteURL": "",
+    "websiteURL": "https://github.com/cyanheads/nonprofit-explorer-mcp-server",
     "defaultPrompt": []
   }
 }

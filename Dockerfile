@@ -38,8 +38,9 @@ ENV NODE_ENV=production
 
 # OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 LABEL org.opencontainers.image.title="nonprofit-explorer-mcp-server"
-LABEL org.opencontainers.image.description=""
+LABEL org.opencontainers.image.description="MCP server for US nonprofit financials via ProPublica — IRS Form 990 data for 1.8M+ tax-exempt organizations."
 LABEL org.opencontainers.image.licenses="Apache-2.0"
+LABEL org.opencontainers.image.source="https://github.com/cyanheads/nonprofit-explorer-mcp-server"
 
 # Copy dependency manifests
 COPY package.json bun.lock ./

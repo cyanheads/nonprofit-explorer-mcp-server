@@ -1,45 +1,13 @@
 # Developer Protocol
 
 **Server:** nonprofit-explorer-mcp-server
-**Version:** 0.1.0
+**Version:** 0.1.1
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.9.19`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.29.0
 **Zod:** ^4.4.3
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
-
----
-
-## First Session
-
-This project was just scaffolded with `bunx @cyanheads/mcp-ts-core init`. The framework, skills, and example definitions are in place — the domain isn't. The user's first messages will set direction; wait for them before proceeding.
-
-> **Remove this section** from CLAUDE.md / AGENTS.md after completing these steps. The skills and conventions below remain — this block is one-time onboarding only.
-
-1. **Get your bearings.** Take stock of the project tree, the skills in `skills/`, and the tools/MCP servers available. Light tool use is fine for context-building — you're mapping the territory, not committing yet.
-2. **Read the framework docs** — `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` (builders, Context, errors, exports, conventions)
-3. **Run the `setup` skill** — read `skills/setup/SKILL.md` and follow its checklist (project orientation, agent protocol file selection, echo definition cleanup, skill sync)
-4. **Design the server** — read `skills/design-mcp-server/SKILL.md` and work through it with the user to map the domain into tools, resources, and services before scaffolding
-
----
-
-## What's Next?
-
-When the user asks what's next or needs direction, suggest options based on the current project state. Common next steps:
-
-1. **Re-run the `setup` skill** — ensures CLAUDE.md, skills, structure, and metadata are populated and up to date with the current codebase
-2. **Run the `design-mcp-server` skill** — if the tool/resource surface hasn't been mapped yet, work through domain design
-3. **Add tools/resources/prompts** — scaffold new definitions using the `add-tool`, `add-app-tool`, `add-resource`, `add-prompt` skills
-4. **Add services** — scaffold domain service integrations using the `add-service` skill
-5. **Add tests** — scaffold tests for existing definitions using the `add-test` skill
-6. **Field-test definitions** — exercise tools/resources/prompts with real inputs using the `field-test` skill, get a report of issues and pain points
-7. **Run `devcheck`** — lint, format, typecheck, and security audit
-8. **Run the `security-pass` skill** — audit handlers for MCP-specific security gaps: output injection, scope blast radius, input sinks, tenant isolation
-9. **Run the `polish-docs-meta` skill** — finalize README, CHANGELOG, metadata, and agent protocol for shipping
-10. **Run the `maintenance` skill** — investigate changelogs, adopt upstream changes, and sync skills after `bun update --latest`
-
-Tailor suggestions to what's actually missing or stale — don't recite the full list every time.
 
 ---
 
@@ -60,101 +28,47 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ```ts
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { getNonprofitExplorerService } from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
 
-export const searchItems = tool('search_items', {
-  description: 'Search inventory items by query.',
+export const nonprofitSearch = tool('nonprofit_search', {
+  title: 'Search Nonprofits',
+  description: 'Search 1.8M+ IRS-recognized tax-exempt organizations by name, keyword, city, or phrase.',
   annotations: { readOnlyHint: true },
   input: z.object({
-    query: z.string().describe('Search terms'),
-    limit: z.number().default(10).describe('Max results'),
+    query: z.string().describe('Keyword search string.'),
+    state: z.string().length(2).optional().describe('Two-letter US state abbreviation.'),
+    page: z.number().int().min(0).default(0).describe('Zero-indexed page number. 25 results per page.'),
   }),
   output: z.object({
-    items: z.array(z.object({
-      id: z.string().describe('Item ID'),
-      name: z.string().describe('Item name'),
-    })).describe('Matching items'),
+    total_results: z.number().describe('Total matching orgs.'),
+    organizations: z.array(z.object({
+      ein: z.number().describe('EIN as integer.'),
+      name: z.string().describe('Legal org name.'),
+    })).describe('Matching organizations for the current page.'),
   }),
-  auth: ['inventory:read'],
-
-  async handler(input, ctx) {
-    const items = await findItems(input.query, input.limit);
-    ctx.log.info('Search completed', { query: input.query, count: items.length });
-    return { items };
-  },
-
-  // format() populates content[] — the markdown twin of structuredContent.
-  // Different clients read different surfaces (Claude Code → structuredContent,
-  // Claude Desktop → content[]); both must carry the same data.
-  // Enforced at lint time: every field in `output` must appear in the rendered text.
-  format: (result) => [{
-    type: 'text',
-    text: result.items.map(i => `**${i.id}**: ${i.name}`).join('\n'),
-  }],
-});
-```
-
-### Resource
-
-```ts
-import { resource, z } from '@cyanheads/mcp-ts-core';
-import { notFound } from '@cyanheads/mcp-ts-core/errors';
-
-export const itemData = resource('inventory://{itemId}', {
-  description: 'Fetch an inventory item by ID.',
-  params: z.object({ itemId: z.string().describe('Item identifier') }),
-  auth: ['inventory:read'],
-  async handler(params, ctx) {
-    const item = await ctx.state.get(`item:${params.itemId}`);
-    if (!item) throw notFound(`Item ${params.itemId} not found`, { itemId: params.itemId });
-    return item;
-  },
-});
-```
-
-### Prompt
-
-```ts
-import { prompt, z } from '@cyanheads/mcp-ts-core';
-
-export const reviewCode = prompt('review_code', {
-  description: 'Review code for issues and best practices.',
-  args: z.object({
-    code: z.string().describe('Code to review'),
-    language: z.string().optional().describe('Programming language'),
-  }),
-  generate: (args) => [
-    { role: 'user', content: { type: 'text', text: `Review this ${args.language ?? ''} code:\n${args.code}` } },
+  errors: [
+    {
+      reason: 'no_results',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'No organizations match the given query and filters',
+      recovery: 'Broaden the keyword query, remove one or more filters, or check spelling.',
+    },
   ],
+  async handler(input, ctx) {
+    const svc = getNonprofitExplorerService();
+    const raw = await svc.search(input, ctx);
+    const orgs = raw.organizations ?? [];
+    if (orgs.length === 0) throw ctx.fail('no_results', `No results for "${input.query}"`);
+    return { total_results: raw.total_results ?? 0, organizations: orgs.map(o => ({ ein: o.ein, name: o.name ?? '' })) };
+  },
+  format: (result) => [{ type: 'text', text: result.organizations.map(o => `**${o.name}** (EIN: ${o.ein})`).join('\n') }],
 });
 ```
-
-### Server config
-
-```ts
-// src/config/server-config.ts — lazy-parsed, separate from framework config
-import { z } from '@cyanheads/mcp-ts-core';
-import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
-
-const ServerConfigSchema = z.object({
-  apiKey: z.string().describe('External API key'),
-  maxResults: z.coerce.number().default(100),
-});
-
-let _config: z.infer<typeof ServerConfigSchema> | undefined;
-export function getServerConfig() {
-  _config ??= parseEnvConfig(ServerConfigSchema, {
-    apiKey: 'MY_API_KEY',
-    maxResults: 'MY_MAX_RESULTS',
-  });
-  return _config;
-}
-```
-
-`parseEnvConfig` maps Zod schema paths → env var names so errors name the variable (`MY_API_KEY`) not the path (`apiKey`). Throws `ConfigurationError`, which the framework prints as a clean startup banner.
 
 ### Server instructions
 
-`createApp({ instructions })` — optional server-level orientation, sent to clients on every `initialize` as session-level context. Use it for deployment guidance (connection aliases, regional notes, scope hints) instead of repeating the same context across tool descriptions. Client adoption is uneven, but there's no downside when set.
+`createApp({ instructions })` — sent to clients on every `initialize` as session-level context. The nonprofit server uses this to orient agents on the search-first workflow and the filing-year lag.
 
 ---
 
@@ -166,10 +80,7 @@ Handlers receive a unified `ctx` object. Key properties:
 |:---------|:------------|
 | `ctx.log` | Request-scoped logger — `.debug()`, `.info()`, `.notice()`, `.warning()`, `.error()`. Auto-correlates requestId, traceId, tenantId. |
 | `ctx.state` | Tenant-scoped KV — `.get(key)`, `.set(key, value, { ttl? })`, `.delete(key)`, `.list(prefix, { cursor, limit })`. Accepts any serializable value. |
-| `ctx.elicit` | Ask user for structured input. **Check for presence first:** `if (ctx.elicit) { ... }` |
-| `ctx.sample` | Request LLM completion from the client. **Check for presence first:** `if (ctx.sample) { ... }` |
 | `ctx.signal` | `AbortSignal` for cancellation. |
-| `ctx.progress` | Task progress (present when `task: true`) — `.setTotal(n)`, `.increment()`, `.update(message)`. |
 | `ctx.requestId` | Unique request ID. |
 | `ctx.tenantId` | Tenant ID from JWT or `'default'` for stdio. |
 
@@ -179,40 +90,29 @@ Handlers receive a unified `ctx` object. Key properties:
 
 Handlers throw — the framework catches, classifies, and formats.
 
-**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable? }]` on `tool()` / `resource()` to receive `ctx.fail(reason, …)` typed against the reason union. TypeScript catches typos at compile time, `data.reason` is auto-populated for observability, linter enforces conformance against the handler body. `recovery` is required descriptive metadata for the agent's next move (≥ 5 words, lint-validated); for the wire `data.recovery.hint` (mirrored into `content[]` text), pass explicitly at the throw site when dynamic context matters: `ctx.fail('reason', msg, { recovery: { hint: '...' } })`. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`) bubble freely and don't need declaring.
+**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable? }]` on `tool()` / `resource()` to receive `ctx.fail(reason, …)` typed against the reason union. TypeScript catches typos at compile time, `data.reason` is auto-populated for observability, linter enforces conformance against the handler body. `recovery` is required descriptive metadata for the agent's next move (≥ 5 words, lint-validated).
 
 ```ts
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 
 errors: [
-  { reason: 'no_match', code: JsonRpcErrorCode.NotFound,
-    when: 'No item matched the query',
-    recovery: 'Broaden the query or check the spelling and try again.' },
+  { reason: 'not_found', code: JsonRpcErrorCode.NotFound,
+    when: 'EIN does not correspond to a known org',
+    recovery: 'Verify the EIN with nonprofit_search. Use the integer EIN value.' },
 ],
 async handler(input, ctx) {
-  const item = await db.find(input.id);
-  if (!item) throw ctx.fail('no_match', `No item ${input.id}`);
-  return item;
+  const org = await svc.getOrganization(normalizeEin(input.ein), ctx);
+  // service throws notFound on missing org — propagated by framework
+  return org;
 }
 ```
-
-**Declare contracts inline on each tool.** The contract is part of the tool's public surface — one file should give the full picture. Don't extract a shared `errors[]` constant; per-tool repetition is the intended cost of locality.
 
 **Fallback (no contract entry fits):** throw via factories or plain `Error`.
 
 ```ts
-// Error factories — explicit code
 import { notFound, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
-throw notFound('Item not found', { itemId });
-throw serviceUnavailable('API unavailable', { url }, { cause: err });
-
-// Plain Error — framework auto-classifies from message patterns
-throw new Error('Item not found');           // → NotFound
-throw new Error('Invalid query format');     // → ValidationError
-
-// McpError — when no factory exists for the code
-import { McpError, JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-throw new McpError(JsonRpcErrorCode.DatabaseError, 'Connection failed', { pool: 'primary' });
+throw notFound('Organization not found', { ein });
+throw serviceUnavailable('ProPublica API unavailable', { url }, { cause: err });
 ```
 
 See framework CLAUDE.md and the `api-errors` skill for the full auto-classification table, all available factories, and the contract reference.
@@ -223,20 +123,16 @@ See framework CLAUDE.md and the `api-errors` skill for the full auto-classificat
 
 ```text
 src/
-  index.ts                              # createApp() entry point
-  config/
-    server-config.ts                    # Server-specific env vars (Zod schema)
+  index.ts                              # createApp() entry point — 3 tools, nonprofit service init
   services/
-    [domain]/
-      [domain]-service.ts               # Domain service (init/accessor pattern)
-      types.ts                          # Domain types
+    nonprofit-explorer/
+      nonprofit-explorer-service.ts     # ProPublica API client (init/accessor pattern)
+      types.ts                          # Domain types (RawOrg, RawFiling, etc.)
   mcp-server/
     tools/definitions/
-      [tool-name].tool.ts               # Tool definitions
-    resources/definitions/
-      [resource-name].resource.ts       # Resource definitions
-    prompts/definitions/
-      [prompt-name].prompt.ts           # Prompt definitions
+      nonprofit-search.tool.ts          # nonprofit_search
+      nonprofit-get-organization.tool.ts# nonprofit_get_organization
+      nonprofit-get-filings.tool.ts     # nonprofit_get_filings
 ```
 
 ---
@@ -245,10 +141,10 @@ src/
 
 | What | Convention | Example |
 |:-----|:-----------|:--------|
-| Files | kebab-case with suffix | `search-docs.tool.ts` |
-| Tool/resource/prompt names | snake_case | `search_docs` |
-| Directories | kebab-case | `src/services/doc-search/` |
-| Descriptions | Single string or template literal, no `+` concatenation | `'Search items by query and filter.'` |
+| Files | kebab-case with suffix | `nonprofit-search.tool.ts` |
+| Tool/resource/prompt names | snake_case | `nonprofit_search` |
+| Directories | kebab-case | `src/services/nonprofit-explorer/` |
+| Descriptions | Single string or template literal, no `+` concatenation | `'Search orgs by name and filter.'` |
 
 ---
 
@@ -293,7 +189,7 @@ Available skills:
 | `api-telemetry` | OTel catalog: spans, metrics, completion logs, env config, cardinality rules |
 | `api-workers` | Cloudflare Workers runtime |
 
-When you complete a skill's checklist, check the boxes and add a completion timestamp at the end (e.g., `Completed: 2026-03-11`).
+When you complete a skill's checklist, check the boxes and add a completion timestamp at the end (e.g., `Completed: 2026-06-01`).
 
 ---
 
@@ -365,7 +261,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { McpError, JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 
 // Server's own code — via path alias
-import { getMyService } from '@/services/my-domain/my-service.js';
+import { getNonprofitExplorerService } from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
 ```
 
 ---
@@ -386,4 +282,4 @@ import { getMyService } from '@/services/my-domain/my-service.js';
 - [ ] `.codex-plugin/plugin.json` populated — `name`, `version`, `description`, `repository`, `license` from `package.json`; `interface.displayName` = package name; `interface.shortDescription` from `package.json` description
 - [ ] `.codex-plugin/mcp.json` updated — server name key matches `package.json` name; env vars added for any required API keys
 - [ ] `.claude-plugin/plugin.json` populated — `name`, `version`, `description`, `repository`, `license` from `package.json`; inline `mcpServers` entry with server name key, env vars for any required API keys
-- [ ] `npm run devcheck` passes
+- [ ] `bun run devcheck` passes
