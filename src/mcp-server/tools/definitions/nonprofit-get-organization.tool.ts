@@ -13,6 +13,13 @@ import {
 
 const USD = (n: number) => `$${n.toLocaleString()}`;
 
+/** Map formtype integer to form label. */
+function formTypeLabel(ft: number | undefined): '990' | '990-EZ' | '990-PF' {
+  if (ft === 1) return '990-EZ';
+  if (ft === 2) return '990-PF';
+  return '990';
+}
+
 export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
   title: 'Get Nonprofit Organization',
   description:
@@ -165,12 +172,6 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     // Pick the latest filing (most recent tax_prd_yr)
     const sorted = [...filings].sort((a, b) => (b.tax_prd_yr ?? 0) - (a.tax_prd_yr ?? 0));
     const latest = sorted[0] ?? null;
-
-    const formTypeLabel = (ft: number | undefined): '990' | '990-EZ' | '990-PF' => {
-      if (ft === 1) return '990-EZ';
-      if (ft === 2) return '990-PF';
-      return '990';
-    };
 
     const latestFiling = latest
       ? {

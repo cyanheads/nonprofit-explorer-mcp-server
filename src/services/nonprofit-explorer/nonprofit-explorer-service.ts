@@ -6,7 +6,7 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { notFound, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
+import { McpError, notFound, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { type RequestContext, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import type { RawOrgResponse, RawSearchResponse, SearchParams } from './types.js';
@@ -64,7 +64,7 @@ export class NonprofitExplorerService {
 
       return { status: response.status, text };
     } catch (err) {
-      if ((err as { code?: string })?.code === 'ERR_MCP_ERROR') throw err; // re-throw McpError
+      if (err instanceof McpError) throw err;
       throw serviceUnavailable(
         `Network error reaching ProPublica API: ${err instanceof Error ? err.message : String(err)}`,
         { url, reason: 'upstream_error' },
@@ -118,23 +118,7 @@ export class NonprofitExplorerService {
         // than letting the network layer throw a generic FetchHttpError.
         const { status, text } = await this.fetchTolerant(url, [404], ctx);
 
-        // Detect HTML 500 responses masquerading as ok
-        if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
-          throw serviceUnavailable(
-            `ProPublica API returned HTML instead of JSON for EIN ${ein} — likely a transient server error.`,
-            { ein, reason: 'upstream_error' },
-          );
-        }
-
-        let data: RawOrgResponse;
-        try {
-          data = JSON.parse(text) as RawOrgResponse;
-        } catch {
-          throw serviceUnavailable(`ProPublica API returned unparseable response for EIN ${ein}.`, {
-            ein,
-            reason: 'upstream_error',
-          });
-        }
+        const data = this.parseJson<RawOrgResponse>(text, url);
 
         // Not-found pattern 1: HTTP 404 + {"error": "Organization not found"}
         if (status === 404) {

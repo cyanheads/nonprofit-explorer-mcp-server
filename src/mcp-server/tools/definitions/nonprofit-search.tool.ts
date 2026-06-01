@@ -175,16 +175,7 @@ export const nonprofitSearch = tool('nonprofit_search', {
     });
 
     const svc = getNonprofitExplorerService();
-    const raw = await svc.search(
-      {
-        query: input.query,
-        state: input.state,
-        ntee_category: input.ntee_category,
-        subsection_code: input.subsection_code,
-        page: input.page,
-      },
-      ctx,
-    );
+    const raw = await svc.search(input, ctx);
 
     const orgs = raw.organizations ?? [];
     const total = raw.total_results ?? 0;
