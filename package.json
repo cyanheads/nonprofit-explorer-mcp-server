@@ -95,6 +95,6 @@
     "ignore": "^7.0.5",
     "tsc-alias": "^1.8.16",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.8"
   }
 }
