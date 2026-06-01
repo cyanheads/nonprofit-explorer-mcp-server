@@ -106,6 +106,23 @@ describe('nonprofitGetOrganization', () => {
     expect(result.filing_count).toBe(0);
   });
 
+  it('formats strein as XX-XXXXXXX when API returns strein: null', async () => {
+    vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+      search: vi.fn(),
+      getOrganization: vi.fn().mockResolvedValue({
+        ...makeRawOrgResponse({ strein: null }),
+      }),
+    } as unknown as svcModule.NonprofitExplorerService);
+
+    const ctx = createMockContext();
+    const input = nonprofitGetOrganization.input.parse({ ein: 530196605 });
+    const result = await nonprofitGetOrganization.handler(input, ctx);
+
+    // Even when the org endpoint omits strein, the handler must produce "XX-XXXXXXX" format.
+    // If this fails, the code fell back to String(einNum) = "530196605" (no hyphen).
+    expect(result.strein).toBe('53-0196605');
+  });
+
   it('propagates not_found with correct code when service throws notFound', async () => {
     vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
       search: vi.fn(),

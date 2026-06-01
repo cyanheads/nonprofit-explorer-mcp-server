@@ -56,7 +56,13 @@ const makeRawFilingsResponse = (overrides: object = {}) => ({
     },
   ],
   filings_without_data: [
-    { tax_prd_yr: 2018, formtype: '990', pdf_url: 'https://example.com/990-2018.pdf' },
+    // formtype is numeric (0/1/2); formtype_str is the human-readable string field
+    {
+      tax_prd_yr: 2018,
+      formtype: 0,
+      formtype_str: '990',
+      pdf_url: 'https://example.com/990-2018.pdf',
+    },
   ],
   data_source: 'ProPublica Nonprofit Explorer',
 });
@@ -192,7 +198,7 @@ describe('nonprofitGetFilings', () => {
     });
   });
 
-  it('returns filings_pdf_only from filings_without_data', async () => {
+  it('returns filings_pdf_only from filings_without_data with correct string form_type_str', async () => {
     const ctx = createMockContext();
     const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
     const result = await nonprofitGetFilings.handler(input, ctx);
@@ -200,6 +206,10 @@ describe('nonprofitGetFilings', () => {
     expect(result.filings_pdf_only).toHaveLength(1);
     expect(result.filings_pdf_only[0]!.tax_prd_yr).toBe(2018);
     expect(result.filings_pdf_only[0]!.pdf_url).toBe('https://example.com/990-2018.pdf');
+    // form_type_str must be the API's formtype_str string field ("990"), NOT the numeric formtype (0).
+    // If this fails, the code read formtype (number) instead of formtype_str (string).
+    expect(typeof result.filings_pdf_only[0]!.form_type_str).toBe('string');
+    expect(result.filings_pdf_only[0]!.form_type_str).toBe('990');
   });
 
   it('handles sparse upstream data (null pdf_url)', async () => {

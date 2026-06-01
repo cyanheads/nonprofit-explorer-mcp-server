@@ -8,15 +8,71 @@ import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import { notFound, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
-import { fetchWithTimeout, type RequestContext, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import { type RequestContext, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import type { RawOrgResponse, RawSearchResponse, SearchParams } from './types.js';
 
 const BASE_URL = 'https://projects.propublica.org/nonprofits/api/v2';
+const FETCH_TIMEOUT_MS = 15_000;
 
 export class NonprofitExplorerService {
   // AppConfig and StorageService are injected for future extensibility (caching, config flags)
   // but are not referenced directly by this keyless, stateless service.
   constructor(_config: AppConfig, _storage: StorageService) {}
+
+  /**
+   * Fetch a URL with timeout, tolerating specific non-2xx statuses instead of throwing.
+   * Returns `{ status, text }` — caller decides whether the status is an error.
+   * Throws `serviceUnavailable` on network errors or unexpected non-JSON responses.
+   */
+  private async fetchTolerant(
+    url: string,
+    toleratedStatuses: number[],
+    ctx: Context,
+  ): Promise<{ status: number; text: string }> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+    // Forward caller's cancellation signal to the AbortController
+    if (ctx.signal) {
+      if (ctx.signal.aborted) {
+        clearTimeout(timeoutId);
+        controller.abort(ctx.signal.reason);
+      } else {
+        ctx.signal.addEventListener('abort', () => controller.abort(ctx.signal.reason), {
+          once: true,
+          signal: controller.signal,
+        });
+      }
+    }
+
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { Accept: 'application/json' },
+      });
+
+      const text = await response.text();
+
+      // Non-2xx that isn't in the tolerated list is a service error
+      if (!response.ok && !toleratedStatuses.includes(response.status)) {
+        throw serviceUnavailable(`ProPublica API returned unexpected status ${response.status}.`, {
+          url,
+          statusCode: response.status,
+          reason: 'upstream_error',
+        });
+      }
+
+      return { status: response.status, text };
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'ERR_MCP_ERROR') throw err; // re-throw McpError
+      throw serviceUnavailable(
+        `Network error reaching ProPublica API: ${err instanceof Error ? err.message : String(err)}`,
+        { url, reason: 'upstream_error' },
+      );
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
 
   /** Search organizations by keyword and optional filters. */
   search(params: SearchParams, ctx: Context): Promise<RawSearchResponse> {
@@ -31,11 +87,10 @@ export class NonprofitExplorerService {
         url.searchParams.set('page', String(params.page));
 
         ctx.log.debug('Searching nonprofits', { url: url.toString() });
-        const response = await fetchWithTimeout(url.toString(), 15_000, rctx, {
-          signal: ctx.signal,
-          headers: { Accept: 'application/json' },
-        });
-        const text = await response.text();
+
+        // ProPublica returns HTTP 404 (not 200) when there are zero results — tolerate it
+        // so the tool handler can throw the correct no_results contract error.
+        const { text } = await this.fetchTolerant(url.toString(), [404], ctx);
         return this.parseJson<RawSearchResponse>(text, url.toString());
       },
       {
@@ -58,13 +113,10 @@ export class NonprofitExplorerService {
         const url = `${BASE_URL}/organizations/${ein}.json`;
         ctx.log.debug('Fetching nonprofit org', { ein });
 
-        // fetchWithTimeout maps HTTP 404 → NotFound, which withRetry will not retry (non-transient).
-        const response = await fetchWithTimeout(url, 15_000, rctx, {
-          signal: ctx.signal,
-          headers: { Accept: 'application/json' },
-        });
-
-        const text = await response.text();
+        // Tolerate 404 — the API returns HTTP 404 + JSON body for "org not found" (not-found
+        // pattern 1). We inspect the body before deciding how to classify the error, rather
+        // than letting the network layer throw a generic FetchHttpError.
+        const { status, text } = await this.fetchTolerant(url, [404], ctx);
 
         // Detect HTML 500 responses masquerading as ok
         if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
@@ -81,6 +133,14 @@ export class NonprofitExplorerService {
           throw serviceUnavailable(`ProPublica API returned unparseable response for EIN ${ein}.`, {
             ein,
             reason: 'upstream_error',
+          });
+        }
+
+        // Not-found pattern 1: HTTP 404 + {"error": "Organization not found"}
+        if (status === 404) {
+          throw notFound(`No organization found for EIN ${ein}.`, {
+            ein,
+            reason: 'not_found',
           });
         }
 
@@ -153,4 +213,13 @@ export function getNonprofitExplorerService(): NonprofitExplorerService {
 export function normalizeEin(ein: number | string): number {
   if (typeof ein === 'number') return ein;
   return parseInt(ein.replace('-', ''), 10);
+}
+
+/**
+ * Format an EIN integer as "XX-XXXXXXX" string.
+ * EINs are 9 digits; the first two form the prefix. Leading zeros are preserved via padding.
+ */
+export function formatEin(ein: number): string {
+  const s = String(ein).padStart(9, '0');
+  return `${s.slice(0, 2)}-${s.slice(2)}`;
 }

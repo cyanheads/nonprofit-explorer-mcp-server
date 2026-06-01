@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import {
+  formatEin,
   getNonprofitExplorerService,
   normalizeEin,
 } from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
@@ -185,7 +186,7 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       : null;
 
     const einNum = org.ein ?? ein;
-    const strein = org.strein ?? String(einNum);
+    const strein = org.strein ?? formatEin(einNum);
 
     return {
       ein: einNum,

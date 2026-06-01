@@ -53,8 +53,10 @@ export interface RawFiling {
 
 /** Raw PDF-only filing (filings_without_data). */
 export interface RawPdfOnlyFiling {
-  formtype?: string; // "990", "990EZ", "990PF"
+  formtype?: number; // 0=990, 1=990-EZ, 2=990-PF (numeric — same as filings_with_data)
+  formtype_str?: string; // "990", "990EZ", "990PF" (human-readable string field)
   pdf_url?: string | null;
+  tax_prd?: number;
   tax_prd_yr?: number;
 }
 

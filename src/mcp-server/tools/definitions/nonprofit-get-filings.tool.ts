@@ -374,7 +374,7 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
 
     const mappedPdfOnly = filingsWithoutData.map((f) => ({
       tax_prd_yr: f.tax_prd_yr ?? 0,
-      form_type_str: f.formtype ?? '',
+      form_type_str: f.formtype_str ?? '',
       pdf_url: f.pdf_url ?? null,
     }));
 
