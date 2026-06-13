@@ -11,6 +11,8 @@ import { nonprofitSearch } from './mcp-server/tools/definitions/nonprofit-search
 import { initNonprofitExplorerService } from './services/nonprofit-explorer/nonprofit-explorer-service.js';
 
 await createApp({
+  name: 'nonprofit-explorer-mcp-server',
+  title: 'nonprofit-explorer-mcp-server',
   tools: [nonprofitSearch, nonprofitGetOrganization, nonprofitGetFilings],
   resources: [],
   prompts: [],
