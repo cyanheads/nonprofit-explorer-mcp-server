@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/nonprofit-explorer-mcp-server",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "mcpName": "io.github.cyanheads/nonprofit-explorer-mcp-server",
   "description": "MCP server for US nonprofit financials via ProPublica — IRS Form 990 data for 1.8M+ tax-exempt organizations.",
   "type": "module",
@@ -96,6 +96,6 @@
     "ignore": "^7.0.5",
     "tsc-alias": "^1.8.17",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.9"
   }
 }
