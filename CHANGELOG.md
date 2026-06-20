@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-06-20
+
+Maintenance — mcp-ts-core ^0.10.9 adoption; devcheck gains dependency-specifier and plugin-manifest guards, fresh-scaffold script hardening, and re-synced vendored skills. No tool-surface changes.
+
 ## [0.1.3](changelog/0.1.x/0.1.3.md) — 2026-06-15
 
 Public hosted endpoint at https://nonprofit-explorer.caseyjhand.com/mcp — server.json remotes, README hosted block and install section.

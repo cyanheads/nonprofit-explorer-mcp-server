@@ -1,6 +1,6 @@
 # nonprofit-explorer-mcp-server - Directory Structure
 
-Generated on: 2026-06-13 04:31:16
+Generated on: 2026-06-20 12:11:03
 
 ```text
 nonprofit-explorer-mcp-server/
@@ -27,6 +27,7 @@ nonprofit-explorer-mcp-server/
 ├── scripts/
 │   ├── build-changelog.ts
 │   ├── build.ts
+│   ├── check-dependency-specifiers.ts
 │   ├── check-docs-sync.ts
 │   ├── check-framework-antipatterns.ts
 │   ├── check-skill-versions.ts
