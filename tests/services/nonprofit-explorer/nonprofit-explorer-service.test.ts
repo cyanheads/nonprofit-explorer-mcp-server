@@ -318,6 +318,30 @@ describe('NonprofitExplorerService.search — pagination boundaries', () => {
     expect(rendered).toContain('244');
   });
 
+  /**
+   * A bare `total_results: 10000` is a saturated ceiling, not a count. The marker has to
+   * reach both surfaces — a structuredContent client doing arithmetic on it otherwise has
+   * nothing in the payload telling it the number is a floor.
+   */
+  it('carries the result-cap caveat on both response surfaces', async () => {
+    http.route({
+      match: SEARCH_URL,
+      respond: () => Response.json({ ...populatedPage, num_pages: 400, total_results: 10_000 }),
+    });
+    const result = await runToolContract(nonprofitSearch, { query: 'inc' });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ total_results: 10_000 });
+
+    const notice = (result.structuredContent as { notice?: string }).notice ?? '';
+    expect(notice).toContain('ceiling');
+
+    const rendered = result.content.map((b) => (b as { text?: string }).text ?? '').join('\n');
+    expect(rendered).toContain('ceiling');
+    // One source for the caveat — the old inline format() suffix would double it up.
+    expect(rendered).not.toContain('API cap reached');
+  });
+
   it('classifies the HTTP 400 offset ceiling as a non-retryable pagination error', async () => {
     http.route({
       match: SEARCH_URL,
@@ -527,7 +551,12 @@ describe('service-originated errors reaching the client', () => {
     expect((result.content[0] as { text: string }).text).toContain(`Recovery: ${declared}`);
   }, 15_000);
 
-  it("preserves nonprofit_get_filings's no_filings recovery hint (regression)", async () => {
+  /**
+   * The org resolved; it simply has no 990 on record. A client branching on `isError`
+   * must be able to tell that from a failed lookup, so the explanation rides the
+   * success path on both surfaces rather than an error envelope.
+   */
+  it('returns an org with no filings as a success on both response surfaces', async () => {
     http.route({
       match: ORG_URL,
       respond: () =>
@@ -539,9 +568,33 @@ describe('service-originated errors reaching the client', () => {
     });
     const result = await runToolContract(nonprofitGetFilings, { ein: 530196605 });
 
-    const declared = declaredRecovery(nonprofitGetFilings, 'no_filings');
+    expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toMatchObject({
-      error: { data: { reason: 'no_filings', recovery: { hint: declared } } },
+      filings: [],
+      filings_pdf_only: [],
+      name: 'The Red Cross',
+      total_filings_with_data: 0,
     });
+
+    const notice = (result.structuredContent as { notice?: string }).notice ?? '';
+    expect(notice).toContain('990N');
+
+    const rendered = result.content.map((b) => (b as { text?: string }).text ?? '').join('\n');
+    expect(rendered).toContain('990N');
+  });
+
+  it('still throws not_found for an EIN that resolves to no organization', async () => {
+    http.route({
+      match: ORG_URL,
+      respond: () => Response.json({ error: 'Organization not found' }, { status: 404 }),
+    });
+    const result = await runToolContract(nonprofitGetFilings, { ein: 100000001 });
+
+    const declared = declaredRecovery(nonprofitGetFilings, 'not_found');
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.NotFound, data: { reason: 'not_found' } },
+    });
+    expect((result.content[0] as { text: string }).text).toContain(`Recovery: ${declared}`);
   });
 });

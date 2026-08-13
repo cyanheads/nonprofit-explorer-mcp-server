@@ -8,7 +8,19 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import {
   getNonprofitExplorerService,
   normalizeStateCode,
+  SEARCH_RESULT_CEILING,
 } from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
+
+/** Pluralize a count so a single-page result set does not read as "1 pages". */
+const plural = (n: number, word: string, pluralForm = `${word}s`) =>
+  `${n.toLocaleString()} ${n === 1 ? word : pluralForm}`;
+
+/** A filter the caller did not supply — distinct from a value the record lacks. */
+const NOT_APPLIED = 'Not applied';
+/** A value the IRS Business Master File does not carry for this organization. */
+const NOT_ON_RECORD = 'Not on record';
+/** No IRS classification code on record for this organization. */
+const NOT_CLASSIFIED = 'Not classified';
 
 export const nonprofitSearch = tool('nonprofit_search', {
   title: 'Search Nonprofits',
@@ -18,6 +30,7 @@ export const nonprofitSearch = tool('nonprofit_search', {
     'Returns EINs — pass them to nonprofit_get_organization or nonprofit_get_filings for details. ' +
     'Results are paginated at 25 per page; use the page parameter and num_pages to paginate. ' +
     'Total results cap at 10,000 in the API; if total_results === 10000 the actual count may be higher. ' +
+    'A zero-match query and a page past the last one both return an empty organizations array with a notice rather than an error; only a page whose offset reaches that 10,000 cap is refused. ' +
     'Supports quoted phrases ("Red Cross"), required terms (+evanston), excluded terms (-dental). ' +
     'Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
   annotations: { readOnlyHint: true },
@@ -26,7 +39,7 @@ export const nonprofitSearch = tool('nonprofit_search', {
     query: z
       .string()
       .describe(
-        'Keyword search string. Searched against org name, alternate name, and city in order of relevance. ' +
+        'Keyword search string. Searched against org name, the secondary name line, and city in order of relevance. ' +
           'Supports: quoted phrases ("Red Cross"), required terms (+evanston), excluded terms (-dental). ' +
           'Empty string returns all orgs within the active filters.',
       ),
@@ -81,7 +94,7 @@ export const nonprofitSearch = tool('nonprofit_search', {
       ])
       .optional()
       .describe(
-        '501(c) subsection code. "3" = public charity (most common — donations tax-deductible), ' +
+        '501(c) subsection code. "3" = charitable/religious/educational organization (most common — includes both public charities and private foundations; nonprofit_get_organization returns foundation_type to tell them apart), ' +
           '"4" = social welfare org, "6" = business league/trade association, ' +
           '"92" = 4947(a)(1) nonexempt charitable trust. Filters by tax status, not sector.',
       ),
@@ -128,7 +141,9 @@ export const nonprofitSearch = tool('nonprofit_search', {
             sub_name: z
               .string()
               .nullable()
-              .describe('Alternate or subtitle name, or chapter identifier. Null when absent.'),
+              .describe(
+                'The legal name with the IRS Business Master File secondary name line appended — a division, service-center, or chapter identifier, not a separate trade name the org operates under. Null when the org has no secondary name line.',
+              ),
             city: z.string().nullable().describe('Headquarters city. Null when not on record.'),
             state: z
               .string()
@@ -144,7 +159,7 @@ export const nonprofitSearch = tool('nonprofit_search', {
               .number()
               .nullable()
               .describe(
-                '501(c) subsection code (e.g., 3 = public charity). Null when not classified.',
+                '501(c) subsection code (e.g., 3 = charitable organization). Null when not classified.',
               ),
             score: z.number().describe('Relevance score — higher = better match.'),
           })
@@ -170,7 +185,7 @@ export const nonprofitSearch = tool('nonprofit_search', {
       .string()
       .optional()
       .describe(
-        'Present when the page carried no organizations — distinguishes a zero-match query from a page past the end of the result set, and names the next call.',
+        'Present when the response needs a caveat the domain fields cannot carry: a page that returned no organizations (distinguishing a zero-match query from a page past the end of the result set, and naming the next call), a total_results sitting on the API result ceiling rather than counting matches, or both at once in one string. Absent when the page is populated and the total is an exact count.',
       ),
   },
 
@@ -237,21 +252,39 @@ export const nonprofitSearch = tool('nonprofit_search', {
     const curPage = raw.cur_page ?? input.page;
 
     /**
-     * An empty page has two causes the caller must handle differently, and `total_results`
-     * — not the HTTP status — separates them: ProPublica returns 404 for both a zero-match
-     * query and a page well past the end. Both are successful searches, so they return an
-     * empty list plus one notice rather than an error. `ctx.enrich.notice` is last-wins, so
-     * the two cases share a single call site.
+     * Three conditions can need a caveat, and they co-occur: an empty page has two
+     * causes the caller must handle differently — `total_results`, not the HTTP status,
+     * separates a zero-match query from a page past the end, since ProPublica answers
+     * both with 404 — and either can land on a `total_results` that is the API's result
+     * ceiling rather than a count. All are successful searches. `ctx.enrich.notice` is
+     * last-wins, so the segments compose into one string emitted by one call; a second
+     * call would silently drop everything before it.
      */
+    const lastPage = numPages - 1;
+    const segments: string[] = [];
+
     if (orgs.length === 0) {
-      ctx.enrich.notice(
+      segments.push(
         total === 0
           ? `No organizations matched query="${input.query}" with the active filters. ` +
               'Broaden the query, drop the state, ntee_category, or subsection_code filter, or check the spelling.'
-          : `Page ${curPage} is past the end of this result set: ${total.toLocaleString()} matches span ` +
-              `${numPages} pages, so the last page is ${numPages - 1}. Re-request with a page in 0–${numPages - 1}.`,
+          : `Page ${curPage} is past the end of this result set: ${plural(total, 'match', 'matches')} span ` +
+              `${plural(numPages, 'page')}, so the last page is ${lastPage}. ` +
+              (numPages === 1
+                ? 'Re-request with page 0.'
+                : `Re-request with a page in 0–${lastPage}.`),
       );
     }
+
+    if (total === SEARCH_RESULT_CEILING) {
+      segments.push(
+        `total_results is ProPublica's ${SEARCH_RESULT_CEILING.toLocaleString()}-result ceiling, not a count of matches — ` +
+          'at least this many match, the true number is unknowable from this API, and pages past the ceiling are refused. ' +
+          'Narrow with the state, ntee_category, or subsection_code filter for a countable result set.',
+      );
+    }
+
+    if (segments.length > 0) ctx.enrich.notice(segments.join(' '));
 
     return {
       total_results: total,
@@ -283,34 +316,49 @@ export const nonprofitSearch = tool('nonprofit_search', {
   format: (result) => {
     const lines: string[] = [];
 
+    /**
+     * The result-cap caveat rides the enrichment notice, which reaches this text as a
+     * trailer — repeating it here would show it twice. The past-the-end marker does not
+     * duplicate anything: without it, "Page 245 of 245 pages" reads as a contradiction
+     * to a client working down content[] before it reaches the trailer.
+     */
+    const lastPage = result.num_pages - 1;
+    const pastEnd = result.num_pages > 0 && result.cur_page > lastPage;
     lines.push(
-      `**Found:** ${result.total_results.toLocaleString()} total org${result.total_results !== 1 ? 's' : ''} ` +
-        `| Page ${result.cur_page} of ${result.num_pages} total pages` +
-        (result.total_results === 10000 ? ' — API cap reached; actual count may be higher' : ''),
+      `**Found:** ${result.total_results.toLocaleString()} total org${result.total_results === 1 ? '' : 's'} ` +
+        `| Page ${result.cur_page} of ${plural(result.num_pages, 'page')}` +
+        (pastEnd ? ` — past the end; the last page is ${lastPage}` : ''),
     );
     lines.push(
       `**Page window:** ${result.per_page} per page, starting at result offset ${result.page_offset}`,
     );
 
+    /**
+     * Every nullable field renders, null included. Dropping one leaves a `content[]`-only
+     * client unable to tell an unapplied filter or an unclassified org from a field the
+     * response never carried — and the labels stay distinct per field, since "not applied"
+     * and "not on record" are different facts.
+     */
     lines.push(`**Query:** ${result.active_filters.query}`);
-    const filters: string[] = [];
-    if (result.active_filters.state) filters.push(`state=${result.active_filters.state}`);
-    if (result.active_filters.ntee_category)
-      filters.push(`ntee=${result.active_filters.ntee_category}`);
-    if (result.active_filters.subsection_code)
-      filters.push(`501(c)=${result.active_filters.subsection_code}`);
-    if (filters.length > 0) lines.push(`**Filters:** ${filters.join(', ')}`);
+    lines.push(
+      `**Filters:** state=${result.active_filters.state ?? NOT_APPLIED}, ` +
+        `ntee=${result.active_filters.ntee_category ?? NOT_APPLIED}, ` +
+        `501(c)=${result.active_filters.subsection_code ?? NOT_APPLIED}`,
+    );
 
     lines.push('');
 
     for (const org of result.organizations) {
       lines.push(`## ${org.name}`);
       lines.push(`**EIN (int):** ${org.ein} | **EIN:** ${org.strein} | **Score:** ${org.score}`);
-      const loc = [org.city, org.state].filter(Boolean).join(', ');
-      if (loc) lines.push(`**Location:** ${loc}`);
-      if (org.ntee_code) lines.push(`**NTEE Code:** ${org.ntee_code}`);
-      if (org.subseccd != null) lines.push(`**501(c):** 501(c)(${org.subseccd})`);
-      if (org.sub_name) lines.push(`**Alternate Name:** ${org.sub_name}`);
+      lines.push(
+        `**City:** ${org.city ?? NOT_ON_RECORD} | **State:** ${org.state ?? NOT_ON_RECORD}`,
+      );
+      lines.push(`**NTEE Code:** ${org.ntee_code ?? NOT_CLASSIFIED}`);
+      lines.push(
+        `**501(c):** ${org.subseccd != null ? `501(c)(${org.subseccd})` : NOT_CLASSIFIED}`,
+      );
+      lines.push(`**Name with Secondary Line:** ${org.sub_name ?? NOT_ON_RECORD}`);
       lines.push('');
     }
 

@@ -4,10 +4,54 @@
  */
 
 import { JsonRpcErrorCode, notFound, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nonprofitGetFilings } from '@/mcp-server/tools/definitions/nonprofit-get-filings.tool.js';
 import * as svcModule from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
+
+type FilingsOutput = Parameters<NonNullable<typeof nonprofitGetFilings.format>>[0];
+type FilingsBlocks = ReturnType<NonNullable<typeof nonprofitGetFilings.format>>;
+type Filing = FilingsOutput['filings'][number];
+
+/** A fully-populated filing; overrides drive the sparse and form-type-specific cases. */
+const makeFiling = (overrides: Partial<Filing> = {}): Filing => ({
+  tax_prd_yr: 2022,
+  tax_prd: 202212,
+  form_type: '990',
+  pdf_url: 'https://example.com/990.pdf',
+  updated: '2024-01-15T00:00:00Z',
+  total_revenue: 3_000_000,
+  total_expenses: 2_800_000,
+  total_assets: 5_000_000,
+  total_liabilities: 1_000_000,
+  net_assets: 4_000_000,
+  contributions_and_grants: 2_500_000,
+  program_service_revenue: 400_000,
+  investment_income: 100_000,
+  program_expense_ratio: null,
+  executive_compensation: {
+    amount: 250_000,
+    field_name: 'compnsatncurrofcr',
+    form_type: '990',
+    note: '990/990-EZ: total compensation of current officers.',
+  },
+  ...overrides,
+});
+
+const makeFormatOutput = (overrides: Partial<FilingsOutput> = {}): FilingsOutput => ({
+  ein: 530196605,
+  name: 'The Red Cross',
+  filings: [makeFiling()],
+  filings_pdf_only: [],
+  total_filings_with_data: 1,
+  total_filings_pdf_only: 0,
+  data_source: 'ProPublica Nonprofit Explorer',
+  propublica_url: 'https://projects.propublica.org/nonprofits/organizations/530196605',
+  ...overrides,
+});
+
+const renderText = (blocks: FilingsBlocks): string =>
+  blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
 
 const makeRawFilingsResponse = (overrides: object = {}) => ({
   organization: {
@@ -85,22 +129,65 @@ describe('nonprofitGetFilings', () => {
     expect(result.filings[1]!.tax_prd_yr).toBe(2021);
   });
 
-  it('computes program expense ratio correctly', async () => {
+  /**
+   * ProPublica's extract carries no Form 990 Part IX column (B) program-service total,
+   * so no arithmetic over the fields it does carry can produce a program-expense ratio.
+   * Neither a full input set nor a sparse one may yield one.
+   */
+  it('returns a null program_expense_ratio for a 990 with every former deduction input present', async () => {
+    const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
+    const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
+    const result = await nonprofitGetFilings.handler(input, ctx);
+
+    // The fixture's newest filing carries compnsatncurrofcr, othrsalwages, and
+    // profndraising — the fullest shape the API returns. Still not derivable.
+    const latest = result.filings[0]!;
+    expect(latest.total_expenses).toBe(2_800_000);
+    expect(latest.program_expense_ratio).toBeNull();
+  });
+
+  it('returns a null program_expense_ratio for a sparse 990-EZ instead of reporting 100%', async () => {
+    vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+      search: vi.fn(),
+      getOrganization: vi.fn().mockResolvedValue({
+        ...makeRawFilingsResponse(),
+        filings_with_data: [
+          {
+            tax_prd: 201812,
+            tax_prd_yr: 2018,
+            formtype: 1, // 990-EZ — no Part IX functional-expense allocation exists
+            pdf_url: 'https://example.com/990ez-2018.pdf',
+            totrevenue: 90_000,
+            totfuncexpns: 80_000,
+            // compnsatncurrofcr / othrsalwages / profndraising absent entirely
+          },
+        ],
+        filings_without_data: [],
+      }),
+    } as unknown as svcModule.NonprofitExplorerService);
+
+    const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
+    const input = nonprofitGetFilings.input.parse({ ein: 371740468 });
+    const result = await nonprofitGetFilings.handler(input, ctx);
+
+    // Treating the three missing inputs as zero previously reported a ratio of 1 (100%).
+    expect(result.filings[0]!.form_type).toBe('990-EZ');
+    expect(result.filings[0]!.program_expense_ratio).toBeNull();
+  });
+
+  it('keeps executive compensation and total expenses when the ratio is unavailable', async () => {
     const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
     const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
     const result = await nonprofitGetFilings.handler(input, ctx);
 
     const latest = result.filings[0]!;
-    expect(latest.program_expense_ratio).not.toBeNull();
-    const ratio = latest.program_expense_ratio!;
+    expect(latest.executive_compensation!.amount).toBe(250_000);
+    expect(latest.total_expenses).toBe(2_800_000);
+    expect(latest.pdf_url).toBe('https://example.com/990-2022.pdf');
+  });
 
-    // program = 2800000 - 250000 - 1200000 - 50000 = 1300000
-    expect(ratio.program_expenses).toBe(1_300_000);
-    // ratio = 1300000 / 2800000 ≈ 0.464
-    expect(ratio.ratio).toBeCloseTo(1_300_000 / 2_800_000, 5);
-    expect(ratio.management_compensation).toBe(250_000);
-    expect(ratio.other_salaries).toBe(1_200_000);
-    expect(ratio.fundraising_expenses).toBe(50_000);
+  it('advertises no derivable program-expense ratio in the tool description', () => {
+    expect(nonprofitGetFilings.description).not.toMatch(/program.expense ratio/i);
   });
 
   it('returns executive compensation for 990 filings', async () => {
@@ -143,7 +230,11 @@ describe('nonprofitGetFilings', () => {
     expect(result.filings[0]!.form_type).toBe('990-PF');
   });
 
-  it('throws no_filings with correct code and reason for orgs with empty filings arrays', async () => {
+  /**
+   * A resolved org with no 990 on record is a citable fact about it — the answer, not
+   * the absence of one. It returns an empty list plus a notice, never an error.
+   */
+  it('returns an org with zero filings as a success carrying an explanatory notice', async () => {
     vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
       search: vi.fn(),
       getOrganization: vi.fn().mockResolvedValue({
@@ -154,11 +245,32 @@ describe('nonprofitGetFilings', () => {
     } as unknown as svcModule.NonprofitExplorerService);
 
     const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
+    const input = nonprofitGetFilings.input.parse({ ein: 472325077 });
+    const result = await nonprofitGetFilings.handler(input, ctx);
+
+    expect(result.filings).toEqual([]);
+    expect(result.filings_pdf_only).toEqual([]);
+    expect(result.total_filings_with_data).toBe(0);
+    expect(result.total_filings_pdf_only).toBe(0);
+    // The org resolved — its name is in hand, which is why this is not a not-found.
+    expect(result.name).toBe('The Red Cross');
+
+    const notice = String(getEnrichment(ctx).notice);
+    expect(notice).toContain('990N');
+    expect(notice).toContain('The Red Cross');
+  });
+
+  it('declares no no_filings reason, since nothing throws it', () => {
+    expect(nonprofitGetFilings.errors?.map((e) => e.reason)).not.toContain('no_filings');
+    expect(nonprofitGetFilings.errors?.map((e) => e.reason)).toContain('not_found');
+  });
+
+  it('leaves a populated filing list free of a notice', async () => {
+    const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
     const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
-    await expect(nonprofitGetFilings.handler(input, ctx)).rejects.toMatchObject({
-      code: JsonRpcErrorCode.NotFound,
-      data: { reason: 'no_filings' },
-    });
+    await nonprofitGetFilings.handler(input, ctx);
+
+    expect(getEnrichment(ctx).notice).toBeUndefined();
   });
 
   it('propagates not_found with correct code when service throws notFound', async () => {
@@ -238,55 +350,117 @@ describe('nonprofitGetFilings', () => {
   });
 
   it('format renders tax year and PDF link', () => {
-    const output = {
-      ein: 530196605,
-      name: 'The Red Cross',
-      filings: [
-        {
-          tax_prd_yr: 2022,
-          tax_prd: 202212,
-          form_type: '990' as const,
-          pdf_url: 'https://example.com/990.pdf',
-          updated: '2024-01-15T00:00:00Z',
-          total_revenue: 3_000_000,
-          total_expenses: 2_800_000,
-          total_assets: 5_000_000,
-          total_liabilities: 1_000_000,
-          net_assets: 4_000_000,
-          contributions_and_grants: 2_500_000,
-          program_service_revenue: 400_000,
-          investment_income: 100_000,
-          program_expense_ratio: {
-            ratio: 0.464,
-            program_expenses: 1_300_000,
-            total_expenses: 2_800_000,
-            management_compensation: 250_000,
-            other_salaries: 1_200_000,
-            fundraising_expenses: 50_000,
-            note: 'Program expenses = total − officer/director comp − other salaries/wages − professional fundraising.',
-          },
-          executive_compensation: {
-            amount: 250_000,
-            field_name: 'compnsatncurrofcr',
-            form_type: '990',
-            note: '990/990-EZ: total compensation of current officers.',
-          },
-        },
-      ],
-      filings_pdf_only: [],
-      total_filings_with_data: 1,
-      total_filings_pdf_only: 0,
-      data_source: 'ProPublica Nonprofit Explorer',
-      propublica_url: 'https://projects.propublica.org/nonprofits/organizations/530196605',
-    };
-    const blocks = nonprofitGetFilings.format!(output);
+    const blocks = nonprofitGetFilings.format!(makeFormatOutput());
     expect(blocks).toHaveLength(1);
-    const block = blocks[0];
-    expect(block?.type).toBe('text');
-    const text = block?.type === 'text' ? block.text : '';
+    expect(blocks[0]?.type).toBe('text');
+    const text = renderText(blocks);
     expect(text).toContain('FY 2022');
     expect(text).toContain('https://example.com/990.pdf');
     expect(text).toContain('202212');
     expect(text).toContain('compnsatncurrofcr');
+  });
+
+  it('format states why the program expense ratio is absent instead of dropping the section', () => {
+    const text = renderText(nonprofitGetFilings.format!(makeFormatOutput()));
+
+    expect(text).toContain('### Program Expense Ratio');
+    expect(text).toMatch(/Not derivable/);
+    expect(text).toContain('Part IX');
+  });
+
+  /**
+   * A 990-PF genuinely has no revenue-breakdown fields; a 990 whose breakdown was not
+   * extracted is a different fact. Collapsing both to one label loses that.
+   */
+  it('format distinguishes 990-PF inapplicable fields from unextracted ones', () => {
+    const pf = renderText(
+      nonprofitGetFilings.format!(
+        makeFormatOutput({
+          filings: [
+            makeFiling({
+              form_type: '990-PF',
+              contributions_and_grants: null,
+              program_service_revenue: null,
+              investment_income: null,
+              net_assets: null,
+            }),
+          ],
+        }),
+      ),
+    );
+    expect(pf).toContain('### Revenue Breakdown');
+    expect(pf).toContain('**Contributions & Grants:** Not applicable for 990-PF');
+    expect(pf).toContain('**Program Service Revenue:** Not applicable for 990-PF');
+    expect(pf).toContain('**Investment Income:** Not applicable for 990-PF');
+    // net_assets is a core financial field, not form-type-specific.
+    expect(pf).toContain('**Net Assets (EoY):** Not extracted');
+
+    const full990 = renderText(
+      nonprofitGetFilings.format!(
+        makeFormatOutput({
+          filings: [makeFiling({ form_type: '990', contributions_and_grants: null })],
+        }),
+      ),
+    );
+    expect(full990).toContain('**Contributions & Grants:** Not extracted');
+  });
+
+  it('format renders unextracted core financials rather than omitting them', () => {
+    const text = renderText(
+      nonprofitGetFilings.format!(
+        makeFormatOutput({
+          filings: [
+            makeFiling({
+              total_revenue: null,
+              total_expenses: null,
+              total_assets: null,
+              total_liabilities: null,
+              net_assets: null,
+              pdf_url: null,
+              updated: null,
+            }),
+          ],
+        }),
+      ),
+    );
+
+    expect(text).toContain('**Revenue:** Not extracted');
+    expect(text).toContain('**Expenses:** Not extracted');
+    expect(text).toContain('**Assets (EoY):** Not extracted');
+    expect(text).toContain('**Liabilities (EoY):** Not extracted');
+    expect(text).toContain('**Net Assets (EoY):** Not extracted');
+    expect(text).toContain('**Source 990 PDF:** Not yet available for this period');
+    expect(text).toContain('**Last updated:** Not provided');
+  });
+
+  it('format renders an absent executive-compensation block with its reason', () => {
+    const text = renderText(
+      nonprofitGetFilings.format!(
+        makeFormatOutput({ filings: [makeFiling({ executive_compensation: null })] }),
+      ),
+    );
+
+    // The label and its sentence must make the same claim: inapplicable, not unreported.
+    expect(text).toContain('### Executive Compensation');
+    expect(text).toContain('**Total:** Not applicable for 990 — no compensation field exists');
+    expect(text).not.toContain('**Total:** Not reported');
+  });
+
+  it('format renders an empty filing list without inventing filings', () => {
+    const text = renderText(
+      nonprofitGetFilings.format!(
+        makeFormatOutput({
+          filings: [],
+          filings_pdf_only: [],
+          total_filings_with_data: 0,
+          total_filings_pdf_only: 0,
+        }),
+      ),
+    );
+
+    expect(text).toContain('The Red Cross');
+    expect(text).toContain('**Filings with data:** 0');
+    expect(text).toContain('No Form 990 with extracted financial data on record');
+    expect(text).not.toContain('## FY');
   });
 });

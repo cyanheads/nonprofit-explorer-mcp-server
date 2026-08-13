@@ -21,8 +21,12 @@ const FETCH_TIMEOUT_MS = 15_000;
 
 /** Search page size applied by ProPublica; not configurable through the API. */
 const SEARCH_RESULTS_PER_PAGE = 25;
-/** ProPublica refuses a request whose result offset reaches this value. */
-const SEARCH_RESULT_CEILING = 10_000;
+/**
+ * ProPublica saturates `total_results` at this value and refuses any request whose
+ * result offset reaches it. A search reporting exactly this total has hit a ceiling,
+ * not counted its matches.
+ */
+export const SEARCH_RESULT_CEILING = 10_000;
 /** Highest zero-indexed page reachable before the offset ceiling rejects the request. */
 const MAX_SEARCH_PAGE = SEARCH_RESULT_CEILING / SEARCH_RESULTS_PER_PAGE - 1;
 

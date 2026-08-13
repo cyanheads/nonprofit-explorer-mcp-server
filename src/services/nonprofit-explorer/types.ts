@@ -71,25 +71,41 @@ export interface RawPdfOnlyFiling {
   tax_prd_yr?: number;
 }
 
-/** Raw organization profile from the org endpoint. */
+/**
+ * Raw organization profile from the org endpoint.
+ *
+ * The `deductibility_code`, `exempt_organization_status_code`, `foundation_code`, and
+ * `tax_period` fields come from the IRS Exempt Organizations Business Master File, not
+ * from an extracted Form 990 — their code tables are documented in the IRS EO BMF
+ * layout (https://www.irs.gov/pub/foia/ig/tege/eo-info.pdf).
+ */
 export interface RawOrganization {
   address?: string | null;
   asset_amount?: number | null;
   city?: string | null;
   data_source?: string;
+  /** IRS BMF deductibility of contributions: 1 = yes, 2 = no, 4 = yes by treaty. */
+  deductibility_code?: number | null;
   ein?: number;
+  /** IRS BMF exemption status: 1 = unconditional, 2 = conditional, 12 and 25 are trusts/terminations. */
+  exempt_organization_status_code?: number | null;
   filings_with_data?: RawFiling[];
   filings_without_data?: RawPdfOnlyFiling[];
+  /** IRS BMF foundation classification: 2–4 are private foundations, 10–25 are public charities. */
+  foundation_code?: number | null;
   id?: number;
   income_amount?: number | null;
   name?: string;
   ntee_code?: string | null;
   revenue_amount?: number | null;
   ruling_date?: string | null;
+  /** IRS BMF secondary name line (SORT_NAME) — an internal sort key, not an alternate org name. */
   sort_name?: string | null;
   state?: string | null;
   strein?: string;
   subsection_code?: number | null;
+  /** Tax period of the latest return recorded in the BMF; often newer than the latest extracted 990. */
+  tax_period?: string | null;
   zipcode?: string | null;
 }
 

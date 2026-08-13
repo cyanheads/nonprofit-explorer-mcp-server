@@ -13,11 +13,74 @@ import {
 
 const USD = (n: number) => `$${n.toLocaleString()}`;
 
+/** A value the IRS Business Master File does not carry for this organization. */
+const NOT_ON_RECORD = 'Not on record';
+/** A figure ProPublica did not extract from the filing. */
+const NOT_EXTRACTED = 'Not extracted';
+/** No IRS classification code on record for this organization. */
+const NOT_CLASSIFIED = 'Not classified';
+
+/** Render a nullable USD amount, naming why it is absent rather than omitting the line. */
+const money = (n: number | null, absent: string = NOT_EXTRACTED) => (n == null ? absent : USD(n));
+
 /** Map formtype integer to form label. */
 function formTypeLabel(ft: number | undefined): '990' | '990-EZ' | '990-PF' {
   if (ft === 1) return '990-EZ';
   if (ft === 2) return '990-PF';
   return '990';
+}
+
+/**
+ * IRS Exempt Organizations Business Master File code tables, per the published EO BMF
+ * layout (https://www.irs.gov/pub/foia/ig/tege/eo-info.pdf). The upstream record carries
+ * opaque integers; decoding them here means the caller does not have to hold the tables.
+ */
+const DEDUCTIBILITY_LABELS: Readonly<Record<number, string>> = {
+  1: 'contributions are deductible',
+  2: 'contributions are not deductible',
+  4: 'contributions are deductible by treaty (foreign organizations)',
+};
+
+const EXEMPT_STATUS_LABELS: Readonly<Record<number, string>> = {
+  1: 'Unconditional Exemption',
+  2: 'Conditional Exemption',
+  12: 'Trust described in section 4947(a)(2)',
+  25: 'Organization terminating its private foundation status under section 507(b)(1)(B)',
+};
+
+const FOUNDATION_LABELS: Readonly<Record<number, string>> = {
+  0: 'All organizations except 501(c)(3)',
+  2: 'Private operating foundation exempt from investment-income excise tax',
+  3: 'Private operating foundation (other)',
+  4: 'Private non-operating foundation',
+  9: 'Suspense',
+  10: 'Church 170(b)(1)(A)(i)',
+  11: 'School 170(b)(1)(A)(ii)',
+  12: 'Hospital or medical research organization 170(b)(1)(A)(iii)',
+  13: 'Organization operated for the benefit of a college or university 170(b)(1)(A)(iv)',
+  14: 'Governmental unit 170(b)(1)(A)(v)',
+  15: 'Publicly supported organization 170(b)(1)(A)(vi)',
+  16: 'Publicly supported organization 509(a)(2)',
+  17: 'Supporting organization 509(a)(3)',
+  18: 'Organization operated to test for public safety 509(a)(4)',
+  21: '509(a)(3) Type I supporting organization',
+  22: '509(a)(3) Type II supporting organization',
+  23: '509(a)(3) Type III supporting organization, functionally integrated',
+  24: '509(a)(3) Type III supporting organization, not functionally integrated',
+  25: 'Agriculture research organization 170(b)(1)(A)(ix)',
+};
+
+/**
+ * Render an IRS code as `<code> — <label>`. The raw code is kept in the value so the
+ * figure stays traceable to the upstream record, and a code outside the published table
+ * is surfaced rather than dropped — the tables gain entries over time.
+ */
+function decodeIrsCode(
+  code: number | null | undefined,
+  labels: Readonly<Record<number, string>>,
+): string | null {
+  if (code == null) return null;
+  return `${code} — ${labels[code] ?? 'unrecognized code'}`;
 }
 
 export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
@@ -26,6 +89,8 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     'Full profile for a single tax-exempt org by EIN: legal name, address, NTEE classification, ' +
     '501(c) type, IRS ruling date, and a financial snapshot from the most recent Form 990 filing ' +
     '(revenue, expenses, assets, net assets, and the source PDF link). ' +
+    'Also returns the IRS Business Master File standing — whether contributions are deductible, ' +
+    'exemption status, and public-charity vs. private-foundation classification. ' +
     'Use nonprofit_search first if you only have an org name — this tool requires an EIN. ' +
     'Data lags 1–2 years; the tax year is shown prominently. ' +
     'Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
@@ -59,7 +124,9 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     sort_name: z
       .string()
       .nullable()
-      .describe('Alternate or subtitle name from the org record. Null when absent.'),
+      .describe(
+        'IRS Business Master File secondary name line (SORT_NAME) — an internal sort key such as a division or service-center label, not an alternate organization name. Null for most orgs.',
+      ),
     address: z.string().nullable().describe('Street address. Null when not on record.'),
     city: z.string().nullable().describe('City. Null when not on record.'),
     state: z
@@ -74,7 +141,9 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     subsection_code: z
       .number()
       .nullable()
-      .describe('501(c) subsection number (e.g., 3 = public charity). Null when not classified.'),
+      .describe(
+        '501(c) subsection number (e.g., 3 = charitable organization, covering both public charities and private foundations — see foundation_type to tell them apart). Null when not classified.',
+      ),
     ruling_date: z
       .string()
       .nullable()
@@ -82,15 +151,39 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     asset_amount: z
       .number()
       .nullable()
-      .describe('Most recent IRS BMF total assets in USD. Null when not reported.'),
+      .describe('Most recent IRS BMF total assets in USD. Null when not on record.'),
     income_amount: z
       .number()
       .nullable()
-      .describe('Most recent IRS BMF total income in USD. Null when not reported.'),
+      .describe('Most recent IRS BMF total income in USD. Null when not on record.'),
     revenue_amount: z
       .number()
       .nullable()
-      .describe('Most recent IRS BMF total revenue in USD. Null when not reported.'),
+      .describe('Most recent IRS BMF total revenue in USD. Null when not on record.'),
+    deductible: z
+      .string()
+      .nullable()
+      .describe(
+        'Whether contributions to this org are tax-deductible, as "<IRS code> — <meaning>". Three states, not two: code 1 deductible, code 2 not deductible, code 4 deductible by treaty (foreign orgs). Null when the IRS Business Master File records no deductibility code.',
+      ),
+    exempt_status: z
+      .string()
+      .nullable()
+      .describe(
+        'IRS exemption status as "<IRS code> — <meaning>"; code 1 is an unconditional exemption. This records what the IRS granted, not whether the exemption is still in force — the Business Master File is a lagging snapshot and automatic revocations are published separately. Null when the Business Master File records no status code.',
+      ),
+    foundation_type: z
+      .string()
+      .nullable()
+      .describe(
+        'IRS foundation classification as "<IRS code> — <meaning>", separating public charities (codes 10–25) from private foundations (codes 2–4). Codes 0 (all organizations except 501(c)(3)) and 9 (suspense) fall outside both groups. Null when the IRS Business Master File records no foundation code.',
+      ),
+    bmf_tax_period: z
+      .string()
+      .nullable()
+      .describe(
+        'Tax period of the latest return recorded in the IRS Business Master File (e.g. "2025-06-01"). Often more recent than latest_filing.tax_prd_yr, which reflects the newest 990 ProPublica has extracted. Null when not on record.',
+      ),
     latest_filing: z
       .object({
         tax_prd_yr: z
@@ -204,6 +297,10 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       asset_amount: org.asset_amount ?? null,
       income_amount: org.income_amount ?? null,
       revenue_amount: org.revenue_amount ?? null,
+      deductible: decodeIrsCode(org.deductibility_code, DEDUCTIBILITY_LABELS),
+      exempt_status: decodeIrsCode(org.exempt_organization_status_code, EXEMPT_STATUS_LABELS),
+      foundation_type: decodeIrsCode(org.foundation_code, FOUNDATION_LABELS),
+      bmf_tax_period: org.tax_period ?? null,
       latest_filing: latestFiling,
       filing_count: filings.length,
       data_source: raw.data_source ?? 'ProPublica Nonprofit Explorer, IRS Form 990 data.',
@@ -214,22 +311,33 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
   format: (result) => {
     const lines: string[] = [];
 
+    /**
+     * Every nullable field renders, null included, with a label naming *why* it is null.
+     * Dropping one leaves a `content[]`-only client unable to tell a value the IRS never
+     * recorded from a field the response never carried, and collapsing the labels would
+     * lose the distinction between unrecorded, unclassified, and unextracted.
+     */
     lines.push(`# ${result.name}`);
-    if (result.sort_name) lines.push(`*${result.sort_name}*`);
     lines.push('');
 
     lines.push(`**EIN:** ${result.strein} (${result.ein})`);
-    if (result.subsection_code != null) {
-      lines.push(`**Type:** 501(c)(${result.subsection_code})`);
-    }
-    if (result.ntee_code) lines.push(`**NTEE Code:** ${result.ntee_code}`);
-    if (result.ruling_date) lines.push(`**IRS Recognition:** ${result.ruling_date}`);
+    lines.push(`**BMF Secondary Name Line:** ${result.sort_name ?? NOT_ON_RECORD}`);
+    lines.push(
+      `**Type:** ${result.subsection_code != null ? `501(c)(${result.subsection_code})` : NOT_CLASSIFIED}`,
+    );
+    lines.push(`**NTEE Code:** ${result.ntee_code ?? NOT_CLASSIFIED}`);
+    lines.push(`**IRS Recognition:** ${result.ruling_date ?? NOT_ON_RECORD}`);
+    lines.push(`**Contributions Deductible:** ${result.deductible ?? NOT_ON_RECORD}`);
+    lines.push(`**IRS Exemption Status:** ${result.exempt_status ?? NOT_ON_RECORD}`);
+    lines.push(`**Foundation Classification:** ${result.foundation_type ?? NOT_ON_RECORD}`);
+    lines.push(`**BMF Tax Period:** ${result.bmf_tax_period ?? NOT_ON_RECORD}`);
     lines.push('');
 
-    const addrParts = [result.address, result.city, result.state, result.zipcode].filter(Boolean);
-    if (addrParts.length > 0) {
-      lines.push(`**Address:** ${addrParts.join(', ')}`);
-    }
+    lines.push(`**Address:** ${result.address ?? NOT_ON_RECORD}`);
+    lines.push(
+      `**City:** ${result.city ?? NOT_ON_RECORD} | **State:** ${result.state ?? NOT_ON_RECORD} | ` +
+        `**ZIP:** ${result.zipcode ?? NOT_ON_RECORD}`,
+    );
 
     lines.push(`**Filings on record:** ${result.filing_count}`);
     lines.push('');
@@ -240,31 +348,22 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       lines.push('');
       lines.push(`## Latest Filing (${f.form_type}, FY ${f.tax_prd_yr})`);
       lines.push('> ⚠️ Data lags 1–2 years. FY shown is the fiscal year, not the current year.');
-      if (f.total_revenue != null) lines.push(`**Revenue:** ${USD(f.total_revenue)}`);
-      if (f.total_expenses != null) lines.push(`**Expenses:** ${USD(f.total_expenses)}`);
-      if (f.total_assets != null) lines.push(`**Assets:** ${USD(f.total_assets)}`);
-      if (f.total_liabilities != null) lines.push(`**Liabilities:** ${USD(f.total_liabilities)}`);
-      if (f.net_assets != null) lines.push(`**Net Assets:** ${USD(f.net_assets)}`);
-      if (f.pdf_url) {
-        lines.push(`**Source 990 PDF:** ${f.pdf_url}`);
-      } else {
-        lines.push('**Source 990 PDF:** Not yet available for this period');
-      }
+      lines.push(`**Revenue:** ${money(f.total_revenue)}`);
+      lines.push(`**Expenses:** ${money(f.total_expenses)}`);
+      lines.push(`**Assets:** ${money(f.total_assets)}`);
+      lines.push(`**Liabilities:** ${money(f.total_liabilities)}`);
+      lines.push(`**Net Assets:** ${money(f.net_assets)}`);
+      lines.push(`**Source 990 PDF:** ${f.pdf_url ?? 'Not yet available for this period'}`);
     } else {
       lines.push('');
       lines.push('*No Form 990 data on file. Org may file Form 990N (under $50K revenue).*');
     }
 
-    if (result.asset_amount != null || result.income_amount != null) {
-      lines.push('');
-      lines.push('## IRS Business Master File Summary');
-      if (result.asset_amount != null)
-        lines.push(`**Total Assets (BMF):** ${USD(result.asset_amount)}`);
-      if (result.income_amount != null)
-        lines.push(`**Total Income (BMF):** ${USD(result.income_amount)}`);
-      if (result.revenue_amount != null)
-        lines.push(`**Total Revenue (BMF):** ${USD(result.revenue_amount)}`);
-    }
+    lines.push('');
+    lines.push('## IRS Business Master File Summary');
+    lines.push(`**Total Assets (BMF):** ${money(result.asset_amount, NOT_ON_RECORD)}`);
+    lines.push(`**Total Income (BMF):** ${money(result.income_amount, NOT_ON_RECORD)}`);
+    lines.push(`**Total Revenue (BMF):** ${money(result.revenue_amount, NOT_ON_RECORD)}`);
 
     lines.push('');
     lines.push(`*${result.data_source}*`);
