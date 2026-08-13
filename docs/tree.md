@@ -1,20 +1,23 @@
 # nonprofit-explorer-mcp-server - Directory Structure
 
-Generated on: 2026-06-20 12:11:03
+Generated on: 2026-08-13 03:43:52
 
 ```text
 nonprofit-explorer-mcp-server/
-├── .claude/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── .codex-plugin/
 │   ├── mcp.json
 │   └── plugin.json
 ├── .github/
-│   └── ISSUE_TEMPLATE/
-│       ├── bug_report.yml
-│       ├── config.yml
-│       └── feature_request.yml
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml
+│   │   ├── config.yml
+│   │   └── feature_request.yml
+│   ├── CODE_OF_CONDUCT.md
+│   ├── CONTRIBUTING.md
+│   ├── FUNDING.yml
+│   └── SECURITY.md
 ├── .vscode/
 │   ├── extensions.json
 │   └── settings.json
@@ -144,12 +147,16 @@ nonprofit-explorer-mcp-server/
 ├── tests/
 │   ├── prompts/
 │   ├── resources/
+│   ├── services/
+│   │   └── nonprofit-explorer/
+│   │       └── nonprofit-explorer-service.test.ts
 │   └── tools/
 │       ├── nonprofit-get-filings.tool.test.ts
 │       ├── nonprofit-get-organization.tool.test.ts
 │       └── nonprofit-search.tool.test.ts
 ├── .dockerignore
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .mcpbignore
 ├── AGENTS.md
@@ -157,6 +164,7 @@ nonprofit-explorer-mcp-server/
 ├── bun.lock
 ├── bunfig.toml
 ├── CHANGELOG.md
+├── CITATION.cff
 ├── CLAUDE.md
 ├── devcheck.config.json
 ├── Dockerfile

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-08-13
+
+Fixes nonprofit_search state-filter case handling and pagination-boundary misclassification, wires recovery hints into service-originated errors, and adopts mcp-ts-core ^0.11.5.
+
 ## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-06-20
 
 Maintenance — mcp-ts-core ^0.10.9 adoption; devcheck gains dependency-specifier and plugin-manifest guards, fresh-scaffold script hardening, and re-synced vendored skills. No tool-surface changes.
