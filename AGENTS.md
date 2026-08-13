@@ -1,7 +1,7 @@
 # Developer Protocol
 
 **Server:** nonprofit-explorer-mcp-server
-**Version:** 0.1.5
+**Version:** 0.1.6
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.11.5`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/sdk` ^1.30.0

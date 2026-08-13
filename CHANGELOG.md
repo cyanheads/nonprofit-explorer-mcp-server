@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.6](changelog/0.1.x/0.1.6.md) — 2026-08-12
+
+Removes nonprofit_get_filings' non-derivable program-expense ratio, adds IRS Business Master File classification fields to nonprofit_get_organization, and renders null values consistently across all three tools' output.
+
 ## [0.1.5](changelog/0.1.x/0.1.5.md) — 2026-08-13
 
 Fixes nonprofit_search state-filter case handling and pagination-boundary misclassification, wires recovery hints into service-originated errors, and adopts mcp-ts-core ^0.11.5.
