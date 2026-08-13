@@ -60,6 +60,8 @@ Single service; all three tools share one HTTP client and one retry boundary. No
 - Backoff: 500ms base, exponential, 3 retries (API is stable; 500s are rare transient errors)
 - HTML 500 responses (the API returns `text/html` for server errors) → classify as transient `ServiceUnavailable`, not `SerializationError`
 - `pdf_url: null` is valid (not a fetch error); the field is simply absent for some IRS batches
+- Deterministic failures carry `retryable: false` so `withRetry` fails fast instead of burning the budget on a request that can never succeed
+- Every service throw spreads `ctx.recoveryFor(reason)` into the error `data`. The framework never auto-injects a contract's `recovery` at runtime — `data.recovery.hint` is what reaches the client on both surfaces, and it is only there if the throw site puts it there. Because `ctx.recoveryFor` is rebuilt per invocation from the calling tool's own contract, one shared service method (`getOrganization`) returns each caller's own `not_found` wording.
 
 ---
 
@@ -102,7 +104,9 @@ z.object({
     'Empty string returns all orgs within the active filters.'
   ),
   state: z.string().length(2).optional().describe(
-    'Two-letter US state abbreviation (e.g., "WA", "NY"). Use "ZZ" for foreign entities. ' +
+    'Two-letter US state, territory, or military postal code (e.g., "WA", "NY", "PR"). ' +
+    'Use "ZZ" for foreign entities. Case-insensitive — normalized to uppercase before filtering. ' +
+    'A code outside that set is rejected rather than silently returning national results. ' +
     'Restricts results to orgs headquartered in that state.'
   ),
   ntee_category: z.enum([
@@ -133,8 +137,10 @@ z.object({
 ```ts
 {
   total_results: number;          // Total matching orgs (up to 10000 per API)
-  num_pages: number;              // Total pages (total_results / 25, ceiling)
+  num_pages: number;              // Total pages (total_results / 25, ceiling); last valid page is num_pages - 1
   cur_page: number;               // Current page (zero-indexed)
+  per_page: number;               // Results per page applied by the API (25)
+  page_offset: number;            // Zero-indexed offset of the first result on this page
   organizations: Array<{
     ein: number;                  // Employer Identification Number — use with other tools
     strein: string;               // EIN in "XX-XXXXXXX" format (preserves leading zeros)
@@ -146,7 +152,7 @@ z.object({
     subseccd: number | null;      // 501(c) subsection code
     score: number;                // Relevance score (higher = better match)
   }>;
-  // Enrichment: active filters echoed back
+  // Active filters echoed back — state is the normalized (uppercased) value actually sent
   active_filters: {
     query: string;
     state: string | null;
@@ -157,15 +163,35 @@ z.object({
 }
 ```
 
+**Enrichment:**
+
+```ts
+enrichment: {
+  notice: z.string().optional().describe(
+    'Present when the page carried no organizations — distinguishes a zero-match query from ' +
+    'a page past the end of the result set, and names the next call.'
+  ),
+}
+```
+
+An empty page is a *successful* search, never an error, and `total_results` (not the HTTP status) says which kind: zero means nothing matched, nonzero means the requested page is past `num_pages`. The two cases route the agent differently — relax the query vs. re-request an in-range page — so each gets its own notice text. `ctx.enrich.notice` is last-wins, so the branches resolve to one string and one call.
+
 **Error contract:**
 
 ```ts
 errors: [
   {
-    reason: 'no_results',
-    code: JsonRpcErrorCode.NotFound,
-    when: 'No organizations match the given query and filters',
-    recovery: 'Broaden the keyword query, remove one or more filters, or check spelling.',
+    reason: 'invalid_state',
+    code: JsonRpcErrorCode.ValidationError,
+    when: 'The state filter is not a US state, territory, or military postal code (or ZZ for foreign entities)',
+    recovery: 'Pass a two-letter USPS code such as WA, NY, or PR; use ZZ for foreign-address organizations, or omit state to search nationally.',
+  },
+  {
+    reason: 'pagination_ceiling',
+    code: JsonRpcErrorCode.ValidationError,
+    when: 'The requested page is at or beyond ProPublica\'s 10,000-result offset ceiling',
+    retryable: false,
+    recovery: 'Narrow the result set with the state, ntee_category, or subsection_code filters or a more specific query, then request a page below 400.',
   },
   {
     reason: 'upstream_error',
@@ -423,14 +449,30 @@ Detection order in the service layer: (1) non-2xx → check for `{"error": ...}`
 **6. `pdf_url` can be null in filings_with_data**
 The API marks `pdf_url` as nullable in the response schema; IRS PDF processing batches occasionally lag behind the extracted financial data, leaving `pdf_url: null` temporarily. The output schema marks `pdf_url` as `string | null`. The format function renders "PDF not yet available for this period" when null rather than omitting the field silently. The `filings_pdf_only` array (from `filings_without_data`) surfaces older filings that have a PDF but no extracted data.
 
-**7. Search total_results caps at 10000**
+**7. Search total_results caps at 10000, and pagination has four distinguishable end states**
 Verified: when filters return more than 10000 results, the API reports `total_results: 10000` and `num_pages: 400`. This is an API ceiling, not the actual count. The output schema documents this; the format function adds a note when `total_results === 10000` indicating the actual count may be higher.
+
+The boundary itself has four shapes, and the HTTP status alone does not separate them:
+
+| Case | HTTP | Discriminator | Classification |
+|:-----|:-----|:--------------|:---------------|
+| Zero-match query | 404 | `total_results: 0` | Success, empty list, zero-match notice |
+| First exhausted page (`cur_page === num_pages`) | 200 | `total_results` nonzero | Success, empty list, past-the-end notice |
+| Well past the last page, under the offset ceiling | 404 | `total_results` nonzero | Success, empty list, past-the-end notice |
+| Offset at/beyond 10,000 (`page * per_page >= 10000`) | 400 | body has `error`, no pagination fields | `pagination_ceiling`, non-retryable |
+
+`total_results` — not the status code — is what separates a zero-match query from an exhausted page, since 404 covers both. Only the 400 shape is an error: it is a deterministic input problem the caller must correct by narrowing the query or lowering `page`, so it is non-retryable rather than the `upstream_error` a tolerated-status list of `[404]` alone produced. A 400 whose body is not a pagination failure stays `upstream_error` — silently reading it as an empty result set would reintroduce the wrong-answer failure mode.
 
 **8. No resources or prompts**
 The workflow is linear: search → profile → filings. All data reachable via tools. No stable URI pattern earns a resource (there's no cross-session injectable context that would help). No recurring message template warrants a prompt.
 
 **9. Attribution in every response**
 The `data_source` field from the API carries ProPublica + IRS attribution text. Every tool passes it through in the output and renders it in `format()`. ProPublica asks for courtesy credit; surfacing it in `format()` text ensures it reaches both `structuredContent` (Claude Code) and `content[]` (Claude Desktop) clients.
+
+**10. The state filter is validated before the request, not after**
+ProPublica honors `state[id]` only on an exact match against a real postal code. Lowercase (`wa`), title-case (`Wa`), and a syntactically valid but nonexistent code (`XX`) are all answered with HTTP 200 and the **unfiltered national result set** — a plausible-looking wrong answer, not an error. The handler therefore uppercases the input and rejects anything outside the USPS state/territory/military set plus `ZZ`.
+
+The rejection lives in the handler rather than the input schema deliberately. The MCP SDK validates tool arguments against the Zod input schema *before* the registered handler runs, so a `.regex()` / `.refine()` / `z.enum()` rejection surfaces as a raw JSON-RPC `-32602` carrying the SDK's generic message — never reaching `ctx.fail`, the tool's `errors[]` contract, or its recovery hint. Validating in the handler keeps the failure inside the typed error path, where the caller gets `invalid_state` plus an actionable next step.
 
 ---
 
@@ -441,4 +483,5 @@ The `data_source` field from the API carries ProPublica + IRS attribution text. 
 - **Small orgs omitted:** Organizations filing Form 990N (under $50,000 revenue) are not in Nonprofit Explorer. The API will return not-found for valid EINs of these organizations.
 - **Program expense ratio approximation:** The extract-level computation is an approximation (see Decision 3). High-stakes research should verify against the PDF.
 - **No bulk search or EIN lookup list:** The API has no batch endpoint. Multiple EIN lookups require separate requests.
+- **Search results beyond 10,000 are unreachable:** ProPublica refuses any page whose result offset reaches 10,000, so pages above 399 cannot be fetched at all (see Decision 7). `nonprofit_search` reports this as `pagination_ceiling` and directs the caller to narrow the query; there is no workaround that walks past the ceiling.
 - **NTEE filter is coarse:** The integer categories (1–10) map to major NTEE groups. There's no filter for sub-codes like "E210" (hospitals within Health). Search results include `ntee_code` (full sub-code) for post-hoc filtering in the client.

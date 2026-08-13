@@ -76,7 +76,7 @@ describe('nonprofitGetFilings', () => {
   });
 
   it('returns filings sorted by tax year descending', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
     const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
     const result = await nonprofitGetFilings.handler(input, ctx);
 
@@ -86,7 +86,7 @@ describe('nonprofitGetFilings', () => {
   });
 
   it('computes program expense ratio correctly', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
     const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
     const result = await nonprofitGetFilings.handler(input, ctx);
 
@@ -104,7 +104,7 @@ describe('nonprofitGetFilings', () => {
   });
 
   it('returns executive compensation for 990 filings', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
     const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
     const result = await nonprofitGetFilings.handler(input, ctx);
 
@@ -134,7 +134,7 @@ describe('nonprofitGetFilings', () => {
       }),
     } as unknown as svcModule.NonprofitExplorerService);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
     const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
     const result = await nonprofitGetFilings.handler(input, ctx);
 
@@ -199,7 +199,7 @@ describe('nonprofitGetFilings', () => {
   });
 
   it('returns filings_pdf_only from filings_without_data with correct string form_type_str', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
     const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
     const result = await nonprofitGetFilings.handler(input, ctx);
 
@@ -230,7 +230,7 @@ describe('nonprofitGetFilings', () => {
       }),
     } as unknown as svcModule.NonprofitExplorerService);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
     const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
     const result = await nonprofitGetFilings.handler(input, ctx);
 
@@ -281,7 +281,9 @@ describe('nonprofitGetFilings', () => {
     };
     const blocks = nonprofitGetFilings.format!(output);
     expect(blocks).toHaveLength(1);
-    const text = blocks[0]!.text;
+    const block = blocks[0];
+    expect(block?.type).toBe('text');
+    const text = block?.type === 'text' ? block.text : '';
     expect(text).toContain('FY 2022');
     expect(text).toContain('https://example.com/990.pdf');
     expect(text).toContain('202212');

@@ -53,7 +53,7 @@ describe('nonprofitGetOrganization', () => {
   });
 
   it('returns full org profile for a valid EIN (integer)', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: nonprofitGetOrganization.errors });
     const input = nonprofitGetOrganization.input.parse({ ein: 530196605 });
     const result = await nonprofitGetOrganization.handler(input, ctx);
 
@@ -66,21 +66,21 @@ describe('nonprofitGetOrganization', () => {
   });
 
   it('accepts EIN as hyphenated string', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: nonprofitGetOrganization.errors });
     const input = nonprofitGetOrganization.input.parse({ ein: '53-0196605' });
     const result = await nonprofitGetOrganization.handler(input, ctx);
     expect(result.ein).toBe(530196605);
   });
 
   it('accepts EIN as string without hyphen', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: nonprofitGetOrganization.errors });
     const input = nonprofitGetOrganization.input.parse({ ein: '530196605' });
     const result = await nonprofitGetOrganization.handler(input, ctx);
     expect(result.ein).toBe(530196605);
   });
 
   it('returns latest_filing with the most recent tax year', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: nonprofitGetOrganization.errors });
     const input = nonprofitGetOrganization.input.parse({ ein: 530196605 });
     const result = await nonprofitGetOrganization.handler(input, ctx);
 
@@ -99,7 +99,7 @@ describe('nonprofitGetOrganization', () => {
       }),
     } as unknown as svcModule.NonprofitExplorerService);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: nonprofitGetOrganization.errors });
     const input = nonprofitGetOrganization.input.parse({ ein: 530196605 });
     const result = await nonprofitGetOrganization.handler(input, ctx);
     expect(result.latest_filing).toBeNull();
@@ -114,7 +114,7 @@ describe('nonprofitGetOrganization', () => {
       }),
     } as unknown as svcModule.NonprofitExplorerService);
 
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: nonprofitGetOrganization.errors });
     const input = nonprofitGetOrganization.input.parse({ ein: 530196605 });
     const result = await nonprofitGetOrganization.handler(input, ctx);
 
@@ -192,7 +192,9 @@ describe('nonprofitGetOrganization', () => {
     };
     const blocks = nonprofitGetOrganization.format!(output);
     expect(blocks).toHaveLength(1);
-    const text = blocks[0]!.text;
+    const block = blocks[0];
+    expect(block?.type).toBe('text');
+    const text = block?.type === 'text' ? block.text : '';
     expect(text).toContain('The Red Cross');
     expect(text).toContain('530196605');
     expect(text).toContain('https://example.com/990.pdf');

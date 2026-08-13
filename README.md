@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.4-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/nonprofit-explorer-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/nonprofit-explorer-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/nonprofit-explorer-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.11-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.1.4-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/nonprofit-explorer-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.30.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/nonprofit-explorer-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/nonprofit-explorer-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -43,11 +43,12 @@ Search for tax-exempt organizations across the IRS Nonprofit Explorer dataset.
 
 - Full-text search across org name, alternate name, and city with relevance ranking
 - Supports quoted phrases (`"Red Cross"`), required terms (`+evanston`), excluded terms (`-dental`)
-- Filter by US state (two-letter abbreviation; `ZZ` for foreign entities)
+- Filter by US state, territory, or military postal code (`ZZ` for foreign entities); case-insensitive, and a code outside that set is rejected rather than silently returning national results
 - Filter by NTEE major sector (Arts, Education, Health, Human Services, etc., 1–10)
 - Filter by 501(c) subsection code (e.g., `3` = public charity, `4` = social welfare)
-- Paginated at 25 per page; use `page` (zero-indexed) and `num_pages` to walk large result sets
-- API caps total results at 10,000; `total_results === 10000` means the actual count may be higher
+- Paginated at 25 per page; use `page` (zero-indexed) with `num_pages`, `per_page`, and `page_offset` to walk large result sets
+- Zero matches and a page past the last one are both successful searches with an empty `organizations` array and a `notice` explaining which case it is
+- API caps total results at 10,000; `total_results === 10000` means the actual count may be higher, and a `page` whose offset reaches 10,000 is refused with the `pagination_ceiling` error
 - Returns EINs — pass to `nonprofit_get_organization` or `nonprofit_get_filings` for details
 
 ---
@@ -184,7 +185,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.3.11](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.3.14](https://bun.sh/) or higher (or Node.js v24+).
 - No API key required — ProPublica Nonprofit Explorer is a keyless public API.
 
 ### Installation

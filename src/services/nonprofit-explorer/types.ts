@@ -20,12 +20,23 @@ export interface RawSearchOrg {
   subseccd?: number | null;
 }
 
-/** Raw search response envelope. */
+/**
+ * Raw search response envelope.
+ *
+ * Pagination metadata is present on every shape except the HTTP 400 offset-ceiling
+ * response, which carries only `data_source`, `api_version`, and `error`.
+ */
 export interface RawSearchResponse {
   cur_page?: number;
   data_source?: string;
+  /** Upstream failure text — the offset-ceiling response's "Pagination out of range". */
+  error?: string;
   num_pages?: number;
   organizations?: RawSearchOrg[];
+  /** Zero-indexed offset of the first result on this page. */
+  page_offset?: number;
+  /** Results per page as applied by the API. */
+  per_page?: number;
   total_results?: number;
 }
 

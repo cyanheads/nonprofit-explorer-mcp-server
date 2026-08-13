@@ -5,7 +5,10 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { getNonprofitExplorerService } from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
+import {
+  getNonprofitExplorerService,
+  normalizeStateCode,
+} from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
 
 export const nonprofitSearch = tool('nonprofit_search', {
   title: 'Search Nonprofits',
@@ -32,8 +35,11 @@ export const nonprofitSearch = tool('nonprofit_search', {
       .length(2)
       .optional()
       .describe(
-        'Two-letter US state abbreviation (e.g., "WA", "NY"). Use "ZZ" for foreign entities. ' +
-          'Restricts results to orgs headquartered in that state.',
+        'Two-letter US state, territory, or military postal code (e.g., "WA", "NY", "PR"). ' +
+          'Case-insensitive — normalized to uppercase before filtering. ' +
+          'A code outside that set is rejected rather than silently returning national results. ' +
+          'Restricts results to orgs headquartered in that state. ' +
+          '"ZZ" (foreign address) is accepted, but no organization in the index currently carries it.',
       ),
     ntee_category: z
       .enum(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'])
@@ -96,8 +102,18 @@ export const nonprofitSearch = tool('nonprofit_search', {
       .describe(
         'Total matching orgs (up to 10,000 — the API ceiling). If 10000, actual count may be higher.',
       ),
-    num_pages: z.number().describe('Total pages available (total_results / 25, ceiling).'),
+    num_pages: z
+      .number()
+      .describe(
+        'Total pages available (total_results / 25, ceiling). The last valid page is num_pages - 1.',
+      ),
     cur_page: z.number().describe('Current page (zero-indexed).'),
+    per_page: z.number().describe('Results per page applied by the API (25).'),
+    page_offset: z
+      .number()
+      .describe(
+        'Zero-indexed offset of the first result on this page. Requests are refused once this reaches 10,000.',
+      ),
     organizations: z
       .array(
         z
@@ -149,12 +165,30 @@ export const nonprofitSearch = tool('nonprofit_search', {
     data_source: z.string().describe('ProPublica + IRS attribution text.'),
   }),
 
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Present when the page carried no organizations — distinguishes a zero-match query from a page past the end of the result set, and names the next call.',
+      ),
+  },
+
   errors: [
     {
-      reason: 'no_results',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'No organizations match the given query and filters',
-      recovery: 'Broaden the keyword query, remove one or more filters, or check spelling.',
+      reason: 'invalid_state',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The state filter is not a US state, territory, or military postal code (or ZZ for foreign entities)',
+      recovery:
+        'Pass a two-letter USPS code such as WA, NY, or PR; use ZZ for foreign-address organizations, or omit state to search nationally.',
+    },
+    {
+      reason: 'pagination_ceiling',
+      code: JsonRpcErrorCode.ValidationError,
+      when: "The requested page is at or beyond ProPublica's 10,000-result offset ceiling",
+      retryable: false,
+      recovery:
+        'Narrow the result set with the state, ntee_category, or subsection_code filters or a more specific query, then request a page below 400.',
     },
     {
       reason: 'upstream_error',
@@ -166,27 +200,56 @@ export const nonprofitSearch = tool('nonprofit_search', {
   ],
 
   async handler(input, ctx) {
+    /**
+     * ProPublica honors `state[id]` only on an exact match against a real postal code and
+     * answers anything else with the unfiltered national result set at HTTP 200. Normalize
+     * case, and reject what still can't be honored — a rejection the caller can act on beats
+     * a plausible-looking national answer labelled as state-filtered.
+     */
+    let state: string | undefined;
+    if (input.state !== undefined) {
+      const normalized = normalizeStateCode(input.state);
+      if (normalized === null) {
+        throw ctx.fail(
+          'invalid_state',
+          `"${input.state}" is not a US state, territory, or military postal code. ` +
+            'ProPublica ignores an unrecognized state filter and returns unfiltered national results.',
+          { ...ctx.recoveryFor('invalid_state') },
+        );
+      }
+      state = normalized;
+    }
+
     ctx.log.info('Searching nonprofits', {
       query: input.query,
-      state: input.state,
+      state,
       ntee_category: input.ntee_category,
       subsection_code: input.subsection_code,
       page: input.page,
     });
 
     const svc = getNonprofitExplorerService();
-    const raw = await svc.search(input, ctx);
+    const raw = await svc.search({ ...input, state }, ctx);
 
     const orgs = raw.organizations ?? [];
     const total = raw.total_results ?? 0;
     const numPages = raw.num_pages ?? 0;
     const curPage = raw.cur_page ?? input.page;
 
+    /**
+     * An empty page has two causes the caller must handle differently, and `total_results`
+     * — not the HTTP status — separates them: ProPublica returns 404 for both a zero-match
+     * query and a page well past the end. Both are successful searches, so they return an
+     * empty list plus one notice rather than an error. `ctx.enrich.notice` is last-wins, so
+     * the two cases share a single call site.
+     */
     if (orgs.length === 0) {
-      throw ctx.fail(
-        'no_results',
-        `No organizations matched query="${input.query}" with the active filters.`,
-        { ...ctx.recoveryFor('no_results') },
+      ctx.enrich.notice(
+        total === 0
+          ? `No organizations matched query="${input.query}" with the active filters. ` +
+              'Broaden the query, drop the state, ntee_category, or subsection_code filter, or check the spelling.'
+          : `Page ${curPage} is past the end of this result set: ${total.toLocaleString()} matches span ` +
+              `${numPages} pages, so the last page is ${numPages - 1}. Re-request with a page in 0–${numPages - 1}.`,
       );
     }
 
@@ -194,6 +257,8 @@ export const nonprofitSearch = tool('nonprofit_search', {
       total_results: total,
       num_pages: numPages,
       cur_page: curPage,
+      per_page: raw.per_page ?? 0,
+      page_offset: raw.page_offset ?? 0,
       organizations: orgs.map((o) => ({
         ein: o.ein,
         strein: o.strein ?? String(o.ein),
@@ -207,7 +272,7 @@ export const nonprofitSearch = tool('nonprofit_search', {
       })),
       active_filters: {
         query: input.query,
-        state: input.state ?? null,
+        state: state ?? null,
         ntee_category: input.ntee_category ?? null,
         subsection_code: input.subsection_code ?? null,
       },
@@ -222,6 +287,9 @@ export const nonprofitSearch = tool('nonprofit_search', {
       `**Found:** ${result.total_results.toLocaleString()} total org${result.total_results !== 1 ? 's' : ''} ` +
         `| Page ${result.cur_page} of ${result.num_pages} total pages` +
         (result.total_results === 10000 ? ' — API cap reached; actual count may be higher' : ''),
+    );
+    lines.push(
+      `**Page window:** ${result.per_page} per page, starting at result offset ${result.page_offset}`,
     );
 
     lines.push(`**Query:** ${result.active_filters.query}`);
