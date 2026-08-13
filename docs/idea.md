@@ -1,5 +1,7 @@
 # nonprofit-explorer-mcp-server — idea
 
+> **Pre-build concept document — superseded by [`design.md`](./design.md).** Kept as a record of the original sketch. Some capabilities below were not built: ProPublica exposes no XML filing link, and no program expense ratio is derivable from its extract. Read `design.md` for what the server actually does.
+
 US tax-exempt organizations via [ProPublica's Nonprofit Explorer](https://projects.propublica.org/nonprofits/) — IRS Form 990 data on 1.8M+ nonprofits: mission, revenue, expenses, assets, and executive compensation, with links to the source filings. Keyless.
 
 Nonprofits (charities, foundations, hospitals, universities, advocacy groups) are a large slice of the economy with their own public financial disclosures via the IRS Form 990. This server makes those disclosures queryable and links every figure back to the source filing.
