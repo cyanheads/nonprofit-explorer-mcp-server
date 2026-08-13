@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "nonprofit-explorer-mcp-server",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "license": "Apache-2.0",
   "description": "Search and explore 1.8M+ US nonprofits, fetch Form 990 financials, and access IRS filing history via MCP. STDIO or Streamable HTTP.",
   "author": { "name": "cyanheads" },

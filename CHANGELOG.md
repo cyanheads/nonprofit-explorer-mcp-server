@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.7](changelog/0.1.x/0.1.7.md) — 2026-08-12
+
+Narrows nonprofit_get_filings' executive_compensation to a non-nullable, tightly-typed shape and removes +-concatenation from every tool description string.
+
 ## [0.1.6](changelog/0.1.x/0.1.6.md) — 2026-08-12
 
 Removes nonprofit_get_filings' non-derivable program-expense ratio, adds IRS Business Master File classification fields to nonprofit_get_organization, and renders null values consistently across all three tools' output.
