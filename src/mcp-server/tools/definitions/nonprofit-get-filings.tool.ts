@@ -40,10 +40,10 @@ function formTypeLabel(ft: number | undefined): '990' | '990-EZ' | '990-PF' {
  */
 function buildExecComp(filing: RawFiling): {
   amount: number | null;
-  field_name: string;
-  form_type: string;
+  field_name: 'compnsatncurrofcr' | 'compofficers';
+  form_type: '990' | '990-EZ' | '990-PF';
   note: string;
-} | null {
+} {
   if (filing.formtype === 2) {
     // 990-PF: compofficers (may be null/absent in the extract)
     return {
@@ -58,7 +58,7 @@ function buildExecComp(filing: RawFiling): {
   return {
     amount: filing.compnsatncurrofcr ?? null,
     field_name: 'compnsatncurrofcr',
-    form_type: filing.formtype === 1 ? '990-EZ' : '990',
+    form_type: formTypeLabel(filing.formtype),
     note:
       '990/990-EZ: total compensation of current officers, directors, trustees, and key employees. ' +
       'Per-officer breakdown requires Schedule J in the source PDF.',
@@ -68,13 +68,7 @@ function buildExecComp(filing: RawFiling): {
 export const nonprofitGetFilings = tool('nonprofit_get_filings', {
   title: 'Get Nonprofit Filings',
   description:
-    'All Form 990 filings for a tax-exempt org by EIN: year-by-year revenue, expenses, assets, ' +
-    'liabilities, net assets, revenue breakdown, executive compensation, and source PDF links. ' +
-    'Use for trend analysis, due diligence, and accessing primary 990 documents. ' +
-    'The filing year (tax_prd_yr) is the fiscal year of the return — data lags 1–2 years; always cite the year. ' +
-    'An organization that resolves but has filed no 990 returns an empty filings array with a notice, not an error. ' +
-    'Also returns filings_pdf_only — older filings with a PDF but no extracted financial data. ' +
-    'Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
+    'All Form 990 filings for a tax-exempt org by EIN: year-by-year revenue, expenses, assets, liabilities, net assets, revenue breakdown, executive compensation, and source PDF links. Use for trend analysis, due diligence, and accessing primary 990 documents. The filing year (tax_prd_yr) is the fiscal year of the return — data lags 1–2 years; always cite the year. An organization that resolves but has filed no 990 returns an empty filings array with a notice, not an error. Also returns filings_pdf_only — older filings with a PDF but no extracted financial data. Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
@@ -218,12 +212,12 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
                   .nullable()
                   .describe('Total executive compensation in USD. Null when not reported.'),
                 field_name: z
-                  .string()
+                  .enum(['compnsatncurrofcr', 'compofficers'])
                   .describe(
-                    'Source API field name for transparency (compnsatncurrofcr or compofficers).',
+                    'Source API field the amount was read from — compnsatncurrofcr on 990 and 990-EZ, compofficers on 990-PF.',
                   ),
                 form_type: z
-                  .string()
+                  .enum(['990', '990-EZ', '990-PF'])
                   .describe('Form type this compensation field is sourced from.'),
                 note: z
                   .string()
@@ -231,10 +225,8 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
                     'Plain-English description of what this field covers and where to find per-officer detail.',
                   ),
               })
-              .nullable()
               .describe(
-                'Executive compensation summary. Field varies by form type. ' +
-                  'Per-officer breakdown requires Schedule J in the source PDF.',
+                'Executive compensation summary. Field varies by form type. Per-officer breakdown requires Schedule J in the source PDF.',
               ),
           })
           .describe('Form 990 filing with extracted financial data for one fiscal year.'),
@@ -437,16 +429,9 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
 
       const ec = f.executive_compensation;
       lines.push('');
-      if (ec == null) {
-        lines.push('### Executive Compensation');
-        lines.push(
-          `**Total:** ${notApplicableFor(f.form_type)} — no compensation field exists on this form type.`,
-        );
-      } else {
-        lines.push(`### Executive Compensation (${ec.form_type})`);
-        lines.push(`**Total (${ec.field_name}):** ${money(ec.amount, NOT_REPORTED)}`);
-        lines.push(`*${ec.note}*`);
-      }
+      lines.push(`### Executive Compensation (${ec.form_type})`);
+      lines.push(`**Total (${ec.field_name}):** ${money(ec.amount, NOT_REPORTED)}`);
+      lines.push(`*${ec.note}*`);
     }
 
     if (result.filings_pdf_only.length > 0) {

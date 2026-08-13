@@ -25,43 +25,27 @@ const NOT_CLASSIFIED = 'Not classified';
 export const nonprofitSearch = tool('nonprofit_search', {
   title: 'Search Nonprofits',
   description:
-    'Search 1.8M+ IRS-recognized tax-exempt organizations by name, keyword, city, or phrase. ' +
-    'Optionally narrow by US state, NTEE major sector (1–10), or 501(c) subsection type. ' +
-    'Returns EINs — pass them to nonprofit_get_organization or nonprofit_get_filings for details. ' +
-    'Results are paginated at 25 per page; use the page parameter and num_pages to paginate. ' +
-    'Total results cap at 10,000 in the API; if total_results === 10000 the actual count may be higher. ' +
-    'A zero-match query and a page past the last one both return an empty organizations array with a notice rather than an error; only a page whose offset reaches that 10,000 cap is refused. ' +
-    'Supports quoted phrases ("Red Cross"), required terms (+evanston), excluded terms (-dental). ' +
-    'Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
+    'Search 1.8M+ IRS-recognized tax-exempt organizations by name, keyword, city, or phrase. Optionally narrow by US state, NTEE major sector (1–10), or 501(c) subsection type. Returns EINs — pass them to nonprofit_get_organization or nonprofit_get_filings for details. Results are paginated at 25 per page; use the page parameter and num_pages to paginate. Total results cap at 10,000 in the API; if total_results === 10000 the actual count may be higher. A zero-match query and a page past the last one both return an empty organizations array with a notice rather than an error; only a page whose offset reaches that 10,000 cap is refused. Supports quoted phrases ("Red Cross"), required terms (+evanston), excluded terms (-dental). Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
   annotations: { readOnlyHint: true },
 
   input: z.object({
     query: z
       .string()
       .describe(
-        'Keyword search string. Searched against org name, the secondary name line, and city in order of relevance. ' +
-          'Supports: quoted phrases ("Red Cross"), required terms (+evanston), excluded terms (-dental). ' +
-          'Empty string returns all orgs within the active filters.',
+        'Keyword search string. Searched against org name, the secondary name line, and city in order of relevance. Supports: quoted phrases ("Red Cross"), required terms (+evanston), excluded terms (-dental). Empty string returns all orgs within the active filters.',
       ),
     state: z
       .string()
       .length(2)
       .optional()
       .describe(
-        'Two-letter US state, territory, or military postal code (e.g., "WA", "NY", "PR"). ' +
-          'Case-insensitive — normalized to uppercase before filtering. ' +
-          'A code outside that set is rejected rather than silently returning national results. ' +
-          'Restricts results to orgs headquartered in that state. ' +
-          '"ZZ" (foreign address) is accepted, but no organization in the index currently carries it.',
+        'Two-letter US state, territory, or military postal code (e.g., "WA", "NY", "PR"). Case-insensitive — normalized to uppercase before filtering. A code outside that set is rejected rather than silently returning national results. Restricts results to orgs headquartered in that state. "ZZ" (foreign address) is accepted, but no organization in the index currently carries it.',
       ),
     ntee_category: z
       .enum(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'])
       .optional()
       .describe(
-        'NTEE (National Taxonomy of Exempt Entities) major group integer (1–10). ' +
-          '1=Arts/Culture/Humanities, 2=Education, 3=Environment/Animals, 4=Health, ' +
-          '5=Human Services, 6=International/Foreign Affairs, 7=Public/Societal Benefit, ' +
-          '8=Religion Related, 9=Mutual/Membership Benefit, 10=Unknown/Unclassified.',
+        'NTEE (National Taxonomy of Exempt Entities) major group integer (1–10). 1=Arts/Culture/Humanities, 2=Education, 3=Environment/Animals, 4=Health, 5=Human Services, 6=International/Foreign Affairs, 7=Public/Societal Benefit, 8=Religion Related, 9=Mutual/Membership Benefit, 10=Unknown/Unclassified.',
       ),
     subsection_code: z
       .enum([
@@ -94,9 +78,7 @@ export const nonprofitSearch = tool('nonprofit_search', {
       ])
       .optional()
       .describe(
-        '501(c) subsection code. "3" = charitable/religious/educational organization (most common — includes both public charities and private foundations; nonprofit_get_organization returns foundation_type to tell them apart), ' +
-          '"4" = social welfare org, "6" = business league/trade association, ' +
-          '"92" = 4947(a)(1) nonexempt charitable trust. Filters by tax status, not sector.',
+        '501(c) subsection code. "3" = charitable/religious/educational organization (most common — includes both public charities and private foundations; nonprofit_get_organization returns foundation_type to tell them apart), "4" = social welfare org, "6" = business league/trade association, "92" = 4947(a)(1) nonexempt charitable trust. Filters by tax status, not sector.',
       ),
     page: z
       .number()
@@ -104,8 +86,7 @@ export const nonprofitSearch = tool('nonprofit_search', {
       .min(0)
       .default(0)
       .describe(
-        'Zero-indexed page number. 25 results per page. Total pages is in num_pages. ' +
-          'Increment to paginate large result sets.',
+        'Zero-indexed page number. 25 results per page. Total pages is in num_pages. Increment to paginate large result sets.',
       ),
   }),
 

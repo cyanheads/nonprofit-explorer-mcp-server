@@ -53,6 +53,16 @@ const makeFormatOutput = (overrides: Partial<FilingsOutput> = {}): FilingsOutput
 const renderText = (blocks: FilingsBlocks): string =>
   blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
 
+/**
+ * A schema-shaped output object built from the typed fixture, then widened so a
+ * deliberately-invalid filing variant can be handed to `output.safeParse`.
+ */
+const outputWithFilingFields = (overrides: Record<string, unknown> = {}): unknown => {
+  const base = makeFormatOutput() as unknown as Record<string, unknown>;
+  const [filing] = base.filings as Record<string, unknown>[];
+  return { ...base, filings: [{ ...filing, ...overrides }] };
+};
+
 const makeRawFilingsResponse = (overrides: object = {}) => ({
   organization: {
     id: 530196605,
@@ -110,6 +120,18 @@ const makeRawFilingsResponse = (overrides: object = {}) => ({
   ],
   data_source: 'ProPublica Nonprofit Explorer',
 });
+
+/** Install a mocked service whose org response carries exactly one raw filing. */
+const mockSingleFiling = (filing: object) => {
+  vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+    search: vi.fn(),
+    getOrganization: vi.fn().mockResolvedValue({
+      ...makeRawFilingsResponse(),
+      filings_with_data: [{ tax_prd: 202212, tax_prd_yr: 2022, pdf_url: null, ...filing }],
+      filings_without_data: [],
+    }),
+  } as unknown as svcModule.NonprofitExplorerService);
+};
 
 describe('nonprofitGetFilings', () => {
   beforeEach(() => {
@@ -195,11 +217,95 @@ describe('nonprofitGetFilings', () => {
     const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
     const result = await nonprofitGetFilings.handler(input, ctx);
 
-    const ec = result.filings[0]!.executive_compensation;
-    expect(ec).not.toBeNull();
-    expect(ec!.field_name).toBe('compnsatncurrofcr');
-    expect(ec!.amount).toBe(250_000);
-    expect(ec!.form_type).toBe('990');
+    expect(result.filings[0]!.executive_compensation).toMatchObject({
+      field_name: 'compnsatncurrofcr',
+      amount: 250_000,
+      form_type: '990',
+    });
+  });
+
+  /**
+   * The 990-PF branch and the 990/990-EZ fall-through are exhaustive: formtype 2 takes
+   * the first, every other value — absent or unrecognized included — takes the second.
+   * No filing shape leaves both inapplicable, so the block is always present and its
+   * form type always agrees with the filing's own.
+   */
+  it.each([
+    { formtype: 0, form_type: '990', field_name: 'compnsatncurrofcr', amount: 250_000 },
+    { formtype: 1, form_type: '990-EZ', field_name: 'compnsatncurrofcr', amount: 250_000 },
+    { formtype: 2, form_type: '990-PF', field_name: 'compofficers', amount: 500_000 },
+    { formtype: undefined, form_type: '990', field_name: 'compnsatncurrofcr', amount: 250_000 },
+    { formtype: 99, form_type: '990', field_name: 'compnsatncurrofcr', amount: 250_000 },
+  ])(
+    'builds an executive-compensation block for formtype $formtype',
+    async ({ formtype, form_type, field_name, amount }) => {
+      mockSingleFiling({ formtype, compnsatncurrofcr: 250_000, compofficers: 500_000 });
+
+      const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
+      const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
+      const result = await nonprofitGetFilings.handler(input, ctx);
+
+      expect(result.filings[0]!.form_type).toBe(form_type);
+      expect(result.filings[0]!.executive_compensation).toMatchObject({
+        form_type,
+        field_name,
+        amount,
+      });
+    },
+  );
+
+  /**
+   * The output contract must not advertise a state the handler cannot reach. A null
+   * block would read to a model as a real upstream condition it has to branch on.
+   */
+  it('rejects a null executive_compensation in the output contract', () => {
+    expect(nonprofitGetFilings.output.safeParse(outputWithFilingFields()).success).toBe(true);
+    expect(
+      nonprofitGetFilings.output.safeParse(outputWithFilingFields({ executive_compensation: null }))
+        .success,
+    ).toBe(false);
+  });
+
+  /**
+   * The same value is described one way at the filing level and must be described the
+   * same way inside the block — a bare string would let a fourth form type through.
+   */
+  it('constrains executive_compensation.form_type to the filing-level form-type enum', () => {
+    const withFormType = (form_type: string) =>
+      outputWithFilingFields({
+        executive_compensation: {
+          amount: 250_000,
+          field_name: 'compnsatncurrofcr',
+          form_type,
+          note: 'note',
+        },
+      });
+
+    for (const formType of ['990', '990-EZ', '990-PF']) {
+      expect(nonprofitGetFilings.output.safeParse(withFormType(formType)).success).toBe(true);
+    }
+    expect(nonprofitGetFilings.output.safeParse(withFormType('990-N')).success).toBe(false);
+  });
+
+  /**
+   * buildExecComp reads exactly one of two upstream fields, so a bare string would
+   * advertise a source the tool can never name.
+   */
+  it('constrains executive_compensation.field_name to the two source fields', () => {
+    const withFieldName = (field_name: string) =>
+      outputWithFilingFields({
+        executive_compensation: {
+          amount: 250_000,
+          field_name,
+          form_type: '990',
+          note: 'note',
+        },
+      });
+
+    for (const fieldName of ['compnsatncurrofcr', 'compofficers']) {
+      expect(nonprofitGetFilings.output.safeParse(withFieldName(fieldName)).success).toBe(true);
+    }
+    expect(nonprofitGetFilings.output.safeParse(withFieldName('totfuncexpns')).success).toBe(false);
   });
 
   it('returns null program_expense_ratio for 990-PF filings', async () => {
@@ -433,18 +539,68 @@ describe('nonprofitGetFilings', () => {
     expect(text).toContain('**Last updated:** Not provided');
   });
 
-  it('format renders an absent executive-compensation block with its reason', () => {
-    const text = renderText(
-      nonprofitGetFilings.format!(
-        makeFormatOutput({ filings: [makeFiling({ executive_compensation: null })] }),
-      ),
-    );
+  /**
+   * Both consumption surfaces, driven through the handler rather than a hand-built
+   * fixture: `structuredContent` clients read the returned block, `content[]` clients
+   * read the rendered section. Every form type carries one.
+   */
+  it.each([
+    { formtype: 0, form_type: '990', field_name: 'compnsatncurrofcr', amount: 250_000 },
+    { formtype: 1, form_type: '990-EZ', field_name: 'compnsatncurrofcr', amount: 250_000 },
+    { formtype: 2, form_type: '990-PF', field_name: 'compofficers', amount: 500_000 },
+  ])(
+    'renders executive compensation on both surfaces for a $form_type filing',
+    async ({ formtype, form_type, field_name, amount }) => {
+      mockSingleFiling({ formtype, compnsatncurrofcr: 250_000, compofficers: 500_000 });
 
-    // The label and its sentence must make the same claim: inapplicable, not unreported.
-    expect(text).toContain('### Executive Compensation');
-    expect(text).toContain('**Total:** Not applicable for 990 — no compensation field exists');
-    expect(text).not.toContain('**Total:** Not reported');
-  });
+      const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
+      const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
+      const result = await nonprofitGetFilings.handler(input, ctx);
+
+      expect(result.filings[0]!.executive_compensation).toMatchObject({
+        form_type,
+        field_name,
+        amount,
+      });
+
+      const text = renderText(nonprofitGetFilings.format!(result));
+      expect(text).toContain(`### Executive Compensation (${form_type})`);
+      expect(text).toContain(`**Total (${field_name}):** $${amount.toLocaleString()}`);
+      // No form type renders the block as inapplicable — the field always exists.
+      expect(text).not.toContain('no compensation field exists');
+    },
+  );
+
+  /**
+   * `amount` is the one genuinely nullable member: the extract omits `compofficers` on
+   * a 990-PF and `compnsatncurrofcr` on a 990/990-EZ often enough to matter. The block
+   * still renders, naming the absence rather than dropping the line.
+   */
+  it.each([
+    { formtype: 0, form_type: '990', field_name: 'compnsatncurrofcr' },
+    { formtype: 2, form_type: '990-PF', field_name: 'compofficers' },
+  ])(
+    'names an unreported executive-compensation amount on both surfaces for a $form_type filing',
+    async ({ formtype, form_type, field_name }) => {
+      // Neither compensation field present — the shape the extract returns when the
+      // organization left the line blank.
+      mockSingleFiling({ formtype, totrevenue: 3_000_000 });
+
+      const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
+      const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
+      const result = await nonprofitGetFilings.handler(input, ctx);
+
+      expect(result.filings[0]!.executive_compensation).toMatchObject({
+        form_type,
+        field_name,
+        amount: null,
+      });
+
+      const text = renderText(nonprofitGetFilings.format!(result));
+      expect(text).toContain(`### Executive Compensation (${form_type})`);
+      expect(text).toContain(`**Total (${field_name}):** Not reported`);
+    },
+  );
 
   it('format renders an empty filing list without inventing filings', () => {
     const text = renderText(

@@ -350,14 +350,14 @@ z.object({
       fundraising_expenses: number | null;     // profndraising (professional fundraising fees)
       note: string;  // Source of the functional allocation
     } | null;
-    // Executive compensation
+    // Executive compensation — always present; every form type carries one of the two fields
     // Field varies by form type: compnsatncurrofcr (990/990-EZ) vs compofficers (990-PF)
     executive_compensation: {
       amount: number | null;
       field_name: string;  // Source field name for transparency: "compnsatncurrofcr" or "compofficers"
-      form_type: string;   // Which form this came from
+      form_type: '990' | '990-EZ' | '990-PF';  // Which form this came from
       note: string;        // e.g., "990: total compensation of current officers, directors, trustees, key employees"
-    } | null;
+    };
   }>;
   // Filings with PDF links only (no extracted financial data)
   filings_pdf_only: Array<{

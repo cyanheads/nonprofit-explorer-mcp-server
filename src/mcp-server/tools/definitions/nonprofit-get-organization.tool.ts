@@ -86,14 +86,7 @@ function decodeIrsCode(
 export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
   title: 'Get Nonprofit Organization',
   description:
-    'Full profile for a single tax-exempt org by EIN: legal name, address, NTEE classification, ' +
-    '501(c) type, IRS ruling date, and a financial snapshot from the most recent Form 990 filing ' +
-    '(revenue, expenses, assets, net assets, and the source PDF link). ' +
-    'Also returns the IRS Business Master File standing — whether contributions are deductible, ' +
-    'exemption status, and public-charity vs. private-foundation classification. ' +
-    'Use nonprofit_search first if you only have an org name — this tool requires an EIN. ' +
-    'Data lags 1–2 years; the tax year is shown prominently. ' +
-    'Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
+    'Full profile for a single tax-exempt org by EIN: legal name, address, NTEE classification, 501(c) type, IRS ruling date, and a financial snapshot from the most recent Form 990 filing (revenue, expenses, assets, net assets, and the source PDF link). Also returns the IRS Business Master File standing — whether contributions are deductible, exemption status, and public-charity vs. private-foundation classification. Use nonprofit_search first if you only have an org name — this tool requires an EIN. Data lags 1–2 years; the tax year is shown prominently. Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
@@ -112,8 +105,7 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
           .describe('EIN as string, with or without hyphen (e.g., "53-0196605" or "530196605").'),
       ])
       .describe(
-        'Employer Identification Number. Accepts integer (530196605) or string with optional hyphen ' +
-          '("53-0196605"). Obtain from nonprofit_search results.',
+        'Employer Identification Number. Accepts integer (530196605) or string with optional hyphen ("53-0196605"). Obtain from nonprofit_search results.',
       ),
   }),
 
