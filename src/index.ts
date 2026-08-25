@@ -16,6 +16,14 @@ await createApp({
   tools: [nonprofitSearch, nonprofitGetOrganization, nonprofitGetFilings],
   resources: [],
   prompts: [],
+  /**
+   * The tool list is fixed at build time — three unconditional registrations, no
+   * feature gate, no auth scope, nothing that emits `toolsChanged` — so every
+   * client is served identical bytes and a shared cache may hold one copy. An
+   * hour bounds how long a client can hold a list minted before a redeploy.
+   * Honored on protocol revision 2026-07-28 only; 2025-era responses are unchanged.
+   */
+  cacheHints: { 'tools/list': { ttlMs: 3_600_000, cacheScope: 'public' } },
   setup(core) {
     initNonprofitExplorerService(core.config, core.storage);
   },
