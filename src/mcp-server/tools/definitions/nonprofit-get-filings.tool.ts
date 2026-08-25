@@ -439,7 +439,10 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
       lines.push('## Older Filings (PDF only — no extracted data)');
       for (const f of result.filings_pdf_only) {
         const pdfLine = f.pdf_url ? `[PDF](${f.pdf_url})` : 'PDF not available';
-        lines.push(`- FY ${f.tax_prd_yr} ${f.form_type_str}: ${pdfLine}`);
+        // form_type_str is '' when the upstream record omits formtype_str; omit the
+        // separator rather than rendering a dangling space before the colon.
+        const formLabel = f.form_type_str ? ` ${f.form_type_str}` : '';
+        lines.push(`- FY ${f.tax_prd_yr}${formLabel}: ${pdfLine}`);
       }
     }
 

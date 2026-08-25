@@ -455,6 +455,147 @@ describe('nonprofitGetFilings', () => {
     expect(result.filings[0]!.pdf_url).toBeNull();
   });
 
+  /**
+   * An organization can change form type between years — a foundation that files a
+   * 990-PF one year and a 990 the next. Every per-filing derivation (form label,
+   * compensation source field, which revenue lines exist at all) is decided from that
+   * filing's own `formtype`, so a history has to be exercised past its first entry:
+   * a single-form fixture would pass even if the code read the newest filing once and
+   * applied its form type to the rest.
+   */
+  it('derives form type and compensation source per filing across a mixed history', async () => {
+    vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+      search: vi.fn(),
+      getOrganization: vi.fn().mockResolvedValue({
+        ...makeRawFilingsResponse(),
+        filings_with_data: [
+          // Deliberately oldest-first — the handler sorts newest-first before mapping.
+          {
+            tax_prd: 202012,
+            tax_prd_yr: 2020,
+            formtype: 2,
+            pdf_url: 'https://example.com/990pf-2020.pdf',
+            totrevenue: 9_000_000,
+            totfuncexpns: 7_000_000,
+            compofficers: 500_000,
+          },
+          {
+            tax_prd: 202112,
+            tax_prd_yr: 2021,
+            formtype: 1,
+            pdf_url: 'https://example.com/990ez-2021.pdf',
+            totrevenue: 180_000,
+            totfuncexpns: 160_000,
+            totcntrbgfts: 150_000,
+            compnsatncurrofcr: 40_000,
+          },
+          {
+            tax_prd: 202212,
+            tax_prd_yr: 2022,
+            formtype: 0,
+            pdf_url: 'https://example.com/990-2022.pdf',
+            totrevenue: 3_000_000,
+            totfuncexpns: 2_800_000,
+            totcntrbgfts: 2_500_000,
+            compnsatncurrofcr: 250_000,
+          },
+        ],
+        filings_without_data: [],
+      }),
+    } as unknown as svcModule.NonprofitExplorerService);
+
+    const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
+    const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
+    const result = await nonprofitGetFilings.handler(input, ctx);
+
+    expect(result.filings.map((f) => f.tax_prd_yr)).toEqual([2022, 2021, 2020]);
+    expect(result.filings.map((f) => [f.form_type, f.executive_compensation.field_name])).toEqual([
+      ['990', 'compnsatncurrofcr'],
+      ['990-EZ', 'compnsatncurrofcr'],
+      ['990-PF', 'compofficers'],
+    ]);
+    expect(result.filings.map((f) => f.executive_compensation.amount)).toEqual([
+      250_000, 40_000, 500_000,
+    ]);
+    // The 990-PF year carries no 990-line contributions figure; the other two do.
+    expect(result.filings.map((f) => f.contributions_and_grants)).toEqual([
+      2_500_000,
+      150_000,
+      null,
+    ]);
+
+    /**
+     * The same null means different things per year, and `format()` has to say which:
+     * "not applicable" on the 990-PF (the line does not exist on that form) versus
+     * "not extracted" elsewhere (the line exists and ProPublica has no value for it).
+     */
+    const text = renderText(nonprofitGetFilings.format!(result));
+    const pfSection = text.slice(text.indexOf('## FY 2020'));
+    expect(pfSection).toContain('**Contributions & Grants:** Not applicable for 990-PF');
+    expect(pfSection).toContain('### Executive Compensation (990-PF)');
+    expect(pfSection).toContain('**Total (compofficers):** $500,000');
+    expect(text.slice(text.indexOf('## FY 2022'), text.indexOf('## FY 2021'))).toContain(
+      '**Contributions & Grants:** $2,500,000',
+    );
+  });
+
+  /**
+   * ProPublica omits a field it has no value for rather than sending null, and the
+   * omission reaches the period identifiers too. The mapped filing has to stay
+   * schema-valid — a `tax_prd_yr` of `undefined` fails `output` parsing, which the
+   * framework now records as a failed call even though the handler returned.
+   */
+  it('keeps a filing whose upstream record omits its period and form type schema-valid', async () => {
+    mockSingleFiling({
+      tax_prd: undefined,
+      tax_prd_yr: undefined,
+      formtype: undefined,
+      updated: undefined,
+      totrevenue: 1_000,
+    });
+
+    const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
+    const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
+    const result = await nonprofitGetFilings.handler(input, ctx);
+
+    expect(nonprofitGetFilings.output.safeParse(result).success).toBe(true);
+    expect(result.filings[0]).toMatchObject({
+      tax_prd_yr: 0,
+      tax_prd: 0,
+      form_type: '990',
+      updated: null,
+    });
+    expect(renderText(nonprofitGetFilings.format!(result))).toContain(
+      '**Last updated:** Not provided',
+    );
+  });
+
+  it('keeps a pdf-only filing whose upstream record omits formtype_str schema-valid', async () => {
+    vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+      search: vi.fn(),
+      getOrganization: vi.fn().mockResolvedValue({
+        ...makeRawFilingsResponse(),
+        filings_with_data: [],
+        filings_without_data: [{ tax_prd_yr: 2009, pdf_url: null }],
+      }),
+    } as unknown as svcModule.NonprofitExplorerService);
+
+    const ctx = createMockContext({ errors: nonprofitGetFilings.errors });
+    const input = nonprofitGetFilings.input.parse({ ein: 530196605 });
+    const result = await nonprofitGetFilings.handler(input, ctx);
+
+    expect(nonprofitGetFilings.output.safeParse(result).success).toBe(true);
+    expect(result.filings_pdf_only[0]).toEqual({
+      tax_prd_yr: 2009,
+      form_type_str: '',
+      pdf_url: null,
+    });
+    // The row still renders — dropping it would hide a filing that exists as a PDF.
+    expect(renderText(nonprofitGetFilings.format!(result))).toContain(
+      '- FY 2009: PDF not available',
+    );
+  });
+
   it('format renders tax year and PDF link', () => {
     const blocks = nonprofitGetFilings.format!(makeFormatOutput());
     expect(blocks).toHaveLength(1);
