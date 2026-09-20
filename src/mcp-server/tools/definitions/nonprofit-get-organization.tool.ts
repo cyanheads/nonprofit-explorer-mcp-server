@@ -226,6 +226,7 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     {
       reason: 'not_found',
       code: JsonRpcErrorCode.NotFound,
+      thrownBy: 'service',
       when: 'The EIN does not correspond to a known organization in the Nonprofit Explorer database',
       recovery:
         'Verify the EIN with nonprofit_search. EINs with leading zeros are stored without them — try the integer value.',
@@ -233,6 +234,7 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     {
       reason: 'upstream_error',
       code: JsonRpcErrorCode.ServiceUnavailable,
+      thrownBy: 'service',
       when: 'ProPublica API returns a non-JSON body (HTML 500) or network error',
       retryable: true,
       recovery: 'Wait a moment and retry.',

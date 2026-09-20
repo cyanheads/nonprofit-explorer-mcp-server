@@ -181,6 +181,7 @@ export const nonprofitSearch = tool('nonprofit_search', {
     {
       reason: 'pagination_ceiling',
       code: JsonRpcErrorCode.ValidationError,
+      thrownBy: 'service',
       when: "The requested page is at or beyond ProPublica's 10,000-result offset ceiling",
       retryable: false,
       recovery:
@@ -189,6 +190,7 @@ export const nonprofitSearch = tool('nonprofit_search', {
     {
       reason: 'upstream_error',
       code: JsonRpcErrorCode.ServiceUnavailable,
+      thrownBy: 'service',
       when: 'ProPublica API returns a 500 or network error',
       retryable: true,
       recovery: "Wait a moment and retry. ProPublica's API is keyless and generally stable.",

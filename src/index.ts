@@ -24,6 +24,13 @@ await createApp({
    * Honored on protocol revision 2026-07-28 only; 2025-era responses are unchanged.
    */
   cacheHints: { 'tools/list': { ttlMs: 3_600_000, cacheScope: 'public' } },
+  /**
+   * Read-only wrapper over a keyless public API: no handler calls `ctx.requestInput`,
+   * and `ctx.state` is tenant-scoped storage rather than the session store, so nothing
+   * here needs a durable session. Declared in code so a deployment that never sets
+   * `MCP_SESSION_MODE` still resolves stateless; the env var still wins when set.
+   */
+  sessionMode: 'stateless',
   setup(core) {
     initNonprofitExplorerService(core.config, core.storage);
   },

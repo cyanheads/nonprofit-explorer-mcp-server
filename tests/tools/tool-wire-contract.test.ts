@@ -63,12 +63,32 @@ describe('tool wire contract', () => {
     it('rejects the call before the handler runs, on both response surfaces', async () => {
       const result = await runToolContract(tool, { ...valid, querry: 'red cross' } as never);
 
+      /**
+       * An argument rejection is `InvalidParams` (-32602), not the `ValidationError`
+       * (-32007) a handler-thrown `ZodError` or an output-schema rejection classifies
+       * as — the call never reached the handler, so the params are what was wrong.
+       * The rejection carries the machine-readable `reason` a client branches on plus
+       * a schema-derived hint naming the keys the tool does accept.
+       */
       expect(result.isError).toBe(true);
       expect(errorEnvelope(result)).toMatchObject({
-        code: JsonRpcErrorCode.ValidationError,
+        code: JsonRpcErrorCode.InvalidParams,
         message: expect.stringContaining('querry'),
+        data: {
+          reason: 'invalid_arguments',
+          recovery: { hint: expect.stringContaining('querry') },
+        },
       });
-      expect(renderText(result)).toContain('querry');
+
+      /**
+       * Containment, never a byte-exact match: the framework composes this block from
+       * the message, a `Recovery:` line, and a `(reason …)` trailer, and each is free
+       * to reword. What has to hold is that a `content[]`-only client can still see
+       * which key was refused and branch on the same reason `structuredContent` carries.
+       */
+      const text = renderText(result);
+      expect(text).toContain('querry');
+      expect(text).toContain('reason invalid_arguments');
     });
   });
 
@@ -110,6 +130,14 @@ describe('tool wire contract', () => {
     for (const field of ['total_results', 'organizations', 'active_filters', 'data_source']) {
       expect(result.structuredContent).not.toHaveProperty(field);
     }
-    expect(renderText(result)).toContain(declared as string);
+
+    /**
+     * The declared reason reaches `content[]` too, not just `structuredContent` — a
+     * client reading only the text block branches on the same term, and gets the
+     * recovery hint verbatim rather than a paraphrase.
+     */
+    const text = renderText(result);
+    expect(text).toContain(declared as string);
+    expect(text).toContain('reason invalid_state');
   });
 });
