@@ -27,9 +27,11 @@
 
 ---
 
-## Tools
+## Overview
 
-3 tools for working with US nonprofit and IRS Form 990 data:
+IRS Form 990 data for 1.8M+ tax-exempt organizations, via the ProPublica Nonprofit Explorer API. Search by name, fetch an org's financial snapshot, and pull its full filing history from any MCP client. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+
+### Tools
 
 | Tool | Description |
 |:---|:---|
@@ -37,60 +39,42 @@
 | `nonprofit_get_organization` | Full profile for one org by EIN: legal identity, IRS classification, ruling date, and a financial snapshot from the most recent Form 990 |
 | `nonprofit_get_filings` | All Form 990 filings for an org by EIN: year-by-year financials, revenue breakdown, executive compensation, and source PDF links |
 
-### `nonprofit_search`
+## Capability reference
 
-Search for tax-exempt organizations across the IRS Nonprofit Explorer dataset.
+### `nonprofit_search` <sub>tool</sub>
 
-- Full-text search across org name, the IRS Business Master File secondary name line, and city with relevance ranking
-- Supports quoted phrases (`"Red Cross"`), required terms (`+evanston`), excluded terms (`-dental`)
-- Filter by US state, territory, or military postal code (`ZZ` for foreign entities); case-insensitive, and a code outside that set is rejected rather than silently returning national results
-- Filter by NTEE major sector (Arts, Education, Health, Human Services, etc., 1–10)
-- Filter by 501(c) subsection code (e.g., `3` = charitable organization — both public charities and private foundations, `4` = social welfare)
-- Paginated at 25 per page; use `page` (zero-indexed) with `num_pages`, `per_page`, and `page_offset` to walk large result sets
-- Zero matches and a page past the last one are both successful searches with an empty `organizations` array and a `notice` explaining which case it is
-- API caps total results at 10,000; `total_results === 10000` means the actual count may be higher, and a `page` whose offset reaches 10,000 is refused with the `pagination_ceiling` error
+- Full-text query — supports quoted phrases (`"Red Cross"`), required terms (`+evanston`), excluded terms (`-dental`)
+- Optional filters: US state/territory or military postal code (`ZZ` for foreign entities; a code outside that set is rejected rather than silently returning national results), NTEE major sector (1–10), 501(c) subsection code (`3` covers both public charities and private foundations — see `foundation_type` on `nonprofit_get_organization` to tell them apart)
+- Paginated at 25 per page (`page`, zero-indexed); `num_pages`, `per_page`, and `page_offset` track position
+- API caps total results at 10,000 — `total_results === 10000` means the actual count may be higher, and a page whose offset reaches that ceiling is refused (`pagination_ceiling`)
+- Zero matches and a page past the last one both succeed with an empty `organizations` array and a `notice` explaining which case it is
 - Returns EINs — pass to `nonprofit_get_organization` or `nonprofit_get_filings` for details
 
 ---
 
-### `nonprofit_get_organization`
+### `nonprofit_get_organization` <sub>tool</sub>
 
-Fetch the full profile for a single tax-exempt org by EIN.
-
-- Accepts EIN as integer (`530196605`) or string with or without hyphen (`"53-0196605"`)
-- Returns legal name, address, NTEE code, 501(c) type, and IRS ruling date
-- IRS Business Master File standing: whether contributions are deductible (including the deductible-by-treaty case), exemption status, and public-charity vs. private-foundation classification — each decoded from its IRS code with the raw code retained
-- Financial snapshot from the most recent Form 990: revenue, expenses, assets, liabilities, net assets
-- Includes source 990 PDF link and IRS Business Master File summary figures
+- Accepts EIN as integer (`530196605`) or string with or without hyphen (`"53-0196605"`); use `nonprofit_search` first if you only have an org name
+- Returns legal identity, address, NTEE code, 501(c) type, and IRS ruling date
+- IRS Business Master File standing: deductibility (including the deductible-by-treaty case), exemption status, and public-charity vs. private-foundation classification — each decoded from its IRS code with the raw code retained
+- Financial snapshot from the most recent Form 990: revenue, expenses, assets, liabilities, net assets, plus the source PDF link
 - `filing_count` shows how many filings with extracted data are on record
-- Data lags 1–2 years; `tax_prd_yr` in the snapshot is the fiscal year of the filing, not the current year
-- Use `nonprofit_search` first if you only have an org name
+- Data lags 1–2 years — `tax_prd_yr` in the snapshot is the fiscal year of the filing, not the current year
 
 ---
 
-### `nonprofit_get_filings`
+### `nonprofit_get_filings` <sub>tool</sub>
 
-Fetch the full filing history for an org by EIN.
-
-- All Form 990 filings with extracted financial data, sorted newest first
-- Per-filing: revenue, expenses, assets, liabilities, net assets, revenue breakdown (contributions, program service, investment income)
+- All Form 990 filings with extracted data, sorted newest first — per filing: revenue, expenses, assets, liabilities, net assets, revenue breakdown (contributions, program service, investment income), and the source PDF link
 - `program_expense_ratio` is always `null` — ProPublica returns no Form 990 Part IX program-service expense total, so the program/management/fundraising split is only in the source PDF
 - Executive compensation summary with field-name transparency and a note pointing to Schedule J for per-officer detail
-- Source 990 PDF link per filing
-- An EIN that resolves to a real org with no 990 on record returns an empty `filings` array plus a `notice` — a successful lookup, not an error
 - `filings_pdf_only` lists older filings with a PDF but no extracted data
-- Data lags 1–2 years; always cite `tax_prd_yr` (fiscal year) when presenting figures
+- An EIN that resolves to a real org with no 990 on record returns an empty `filings` array plus a `notice`, not an error
+- Data lags 1–2 years — always cite `tax_prd_yr` (fiscal year) when presenting figures
 
 ## Features
 
-Built on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@cyanheads/mcp-ts-core):
-
-- Declarative tool definitions — single file per tool, framework handles registration and validation
-- Unified error handling — handlers throw, framework catches, classifies, and formats
-- Pluggable auth: `none`, `jwt`, `oauth`
-- Swappable storage backends: `in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`
-- Structured logging with optional OpenTelemetry tracing
-- STDIO and Streamable HTTP transports
+Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): stdio and Streamable HTTP transports, pluggable auth (`none` / `jwt` / `oauth`), swappable storage (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`), structured logging with optional OpenTelemetry tracing.
 
 ProPublica Nonprofit Explorer / IRS-specific:
 
@@ -124,7 +108,9 @@ A public instance is available at `https://nonprofit-explorer.caseyjhand.com/mcp
 }
 ```
 
-Or, install locally and add the following to your MCP client configuration file.
+### Self-Hosted / Local
+
+Add the following to your MCP client configuration file.
 
 ```json
 {
@@ -291,7 +277,7 @@ See [`CLAUDE.md`/`AGENTS.md`](./CLAUDE.md) for development guidelines and archit
 
 ## Contributing
 
-Issues and pull requests are welcome. Run checks and tests before submitting:
+Issues are welcome. Run checks and tests before submitting:
 
 ```sh
 bun run devcheck
