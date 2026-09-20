@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.9](changelog/0.1.x/0.1.9.md) — 2026-09-20 · ⚠️ Breaking
+
+Adopts @cyanheads/mcp-ts-core ^0.13.6 — bad tool arguments now reject as InvalidParams with a reason and recovery hint, tool error text states the reason and retryability, and a mid-flight cancellation classifies RequestCancelled instead of a generic error.
+
 ## [0.1.8](changelog/0.1.x/0.1.8.md) — 2026-08-25
 
 Adopts @cyanheads/mcp-ts-core 0.12.3 and MCP SDK v2: an argument key no tool schema declares is now rejected by name instead of silently dropped, and every tool's outputSchema declares the error envelope.

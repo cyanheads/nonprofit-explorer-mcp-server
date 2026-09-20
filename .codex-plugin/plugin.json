@@ -1,6 +1,6 @@
 {
   "name": "nonprofit-explorer-mcp-server",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Search and explore 1.8M+ US nonprofits, fetch Form 990 financials, and access IRS filing history via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",
