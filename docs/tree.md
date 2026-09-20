@@ -1,6 +1,6 @@
 # nonprofit-explorer-mcp-server - Directory Structure
 
-Generated on: 2026-09-20 14:59:49
+Generated on: 2026-09-20 15:22:58
 
 ```text
 nonprofit-explorer-mcp-server/
@@ -14,6 +14,8 @@ nonprofit-explorer-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
+│   ├── workflows/
+│   │   └── codeql.yml
 │   ├── CODE_OF_CONDUCT.md
 │   ├── CONTRIBUTING.md
 │   ├── FUNDING.yml
