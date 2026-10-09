@@ -4,7 +4,7 @@
  */
 
 import { JsonRpcErrorCode, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nonprofitSearch } from '@/mcp-server/tools/definitions/nonprofit-search.tool.js';
 import * as svcModule from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
@@ -233,9 +233,15 @@ describe('nonprofitSearch', () => {
     const declared = nonprofitSearch.errors?.find((e) => e.reason === 'invalid_state')?.recovery;
     expect(declared).toBeTypeOf('string');
 
-    const ctx = createMockContext({ errors: nonprofitSearch.errors });
-    const input = nonprofitSearch.input.parse({ query: 'food', state: 'XX', page: 0 });
-    await expect(nonprofitSearch.handler(input, ctx)).rejects.toMatchObject({
+    /**
+     * Through `runToolContract`: the handler throws `ctx.fail('invalid_state', …)` without
+     * a hint, and the framework fills the declared `recovery` on the way out.
+     */
+    const result = await runToolContract(nonprofitSearch, { query: 'food', state: 'XX', page: 0 });
+    expect(result.isError).toBe(true);
+    expect(
+      (result.structuredContent as { error?: Record<string, unknown> } | undefined)?.error,
+    ).toMatchObject({
       code: JsonRpcErrorCode.ValidationError,
       data: { reason: 'invalid_state', recovery: { hint: declared } },
     });

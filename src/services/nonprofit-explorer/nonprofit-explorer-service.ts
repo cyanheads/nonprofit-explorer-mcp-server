@@ -75,7 +75,6 @@ export class NonprofitExplorerService {
           url,
           statusCode: response.status,
           reason: 'upstream_error',
-          ...ctx.recoveryFor('upstream_error'),
         });
       }
 
@@ -84,7 +83,7 @@ export class NonprofitExplorerService {
       if (err instanceof McpError) throw err;
       throw serviceUnavailable(
         `Network error reaching ProPublica API: ${err instanceof Error ? err.message : String(err)}`,
-        { url, reason: 'upstream_error', ...ctx.recoveryFor('upstream_error') },
+        { url, reason: 'upstream_error' },
       );
     } finally {
       clearTimeout(timeoutId);
@@ -112,26 +111,20 @@ export class NonprofitExplorerService {
          * 400 shape is a hard boundary the caller must correct.
          */
         const { status, text } = await this.fetchTolerant(url.toString(), [400, 404], ctx);
-        const data = this.parseJson<RawSearchResponse>(text, url.toString(), ctx);
+        const data = this.parseJson<RawSearchResponse>(text, url.toString());
 
         if (status === 400) {
           if (/pagination/i.test(data.error ?? '')) {
             throw validationError(
               `Page ${params.page} is at or beyond ProPublica's ${SEARCH_RESULT_CEILING.toLocaleString()}-result pagination ceiling. ` +
                 `At ${SEARCH_RESULTS_PER_PAGE} results per page, pages 0–${MAX_SEARCH_PAGE} are reachable.`,
-              {
-                page: params.page,
-                reason: 'pagination_ceiling',
-                retryable: false,
-                ...ctx.recoveryFor('pagination_ceiling'),
-              },
+              { page: params.page, reason: 'pagination_ceiling', retryable: false },
             );
           }
           throw serviceUnavailable('ProPublica API rejected the search request.', {
             url: url.toString(),
             statusCode: status,
             reason: 'upstream_error',
-            ...ctx.recoveryFor('upstream_error'),
           });
         }
 
@@ -161,7 +154,7 @@ export class NonprofitExplorerService {
         // the network layer throw a generic FetchHttpError.
         const { status, text } = await this.fetchTolerant(url, [404], ctx);
 
-        const data = this.parseJson<RawOrgResponse>(text, url, ctx);
+        const data = this.parseJson<RawOrgResponse>(text, url);
         const org = data.organization;
 
         /**
@@ -174,11 +167,7 @@ export class NonprofitExplorerService {
           org.id === 0 ||
           (org.name === 'Unknown Organization' && org.address === null)
         ) {
-          throw notFound(`No organization found for EIN ${ein}.`, {
-            ein,
-            reason: 'not_found',
-            ...ctx.recoveryFor('not_found'),
-          });
+          throw notFound(`No organization found for EIN ${ein}.`, { ein, reason: 'not_found' });
         }
 
         return data;
@@ -193,11 +182,11 @@ export class NonprofitExplorerService {
   }
 
   /** Parse JSON from an upstream response; throws serviceUnavailable on HTML error pages. */
-  private parseJson<T>(text: string, url: string, ctx: Context): T {
+  private parseJson<T>(text: string, url: string): T {
     if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
       throw serviceUnavailable(
         'ProPublica API returned HTML instead of JSON — likely a transient server error.',
-        { url, reason: 'upstream_error', ...ctx.recoveryFor('upstream_error') },
+        { url, reason: 'upstream_error' },
       );
     }
     try {
@@ -206,7 +195,6 @@ export class NonprofitExplorerService {
       throw serviceUnavailable('ProPublica API returned unparseable response.', {
         url,
         reason: 'upstream_error',
-        ...ctx.recoveryFor('upstream_error'),
       });
     }
   }

@@ -61,7 +61,7 @@ Single service; all three tools share one HTTP client and one retry boundary. No
 - HTML 500 responses (the API returns `text/html` for server errors) → classify as transient `ServiceUnavailable`, not `SerializationError`
 - `pdf_url: null` is valid (not a fetch error); the field is simply absent for some IRS batches
 - Deterministic failures carry `retryable: false` so `withRetry` fails fast instead of burning the budget on a request that can never succeed
-- Every service throw spreads `ctx.recoveryFor(reason)` into the error `data`. The framework never auto-injects a contract's `recovery` at runtime — `data.recovery.hint` is what reaches the client on both surfaces, and it is only there if the throw site puts it there. Because `ctx.recoveryFor` is rebuilt per invocation from the calling tool's own contract, one shared service method (`getOrganization`) returns each caller's own `not_found` wording.
+- Every service throw sets `data.reason` and nothing else recovery-related. The framework fills `data.recovery.hint` from the calling tool's own `errors[]` entry for that reason, so one shared service method (`getOrganization`) returns each caller's own `not_found` wording on both surfaces.
 
 ---
 

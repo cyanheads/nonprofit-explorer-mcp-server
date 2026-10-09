@@ -212,7 +212,6 @@ export const nonprofitSearch = tool('nonprofit_search', {
           'invalid_state',
           `"${input.state}" is not a US state, territory, or military postal code. ` +
             'ProPublica ignores an unrecognized state filter and returns unfiltered national results.',
-          { ...ctx.recoveryFor('invalid_state') },
         );
       }
       state = normalized;

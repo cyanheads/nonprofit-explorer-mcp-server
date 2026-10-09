@@ -464,8 +464,9 @@ describe('NonprofitExplorerService.getOrganization — not-found patterns', () =
 describe('service-originated errors reaching the client', () => {
   /**
    * `getOrganization()` is shared by two tools whose `not_found` recovery text differs.
-   * `ctx.recoveryFor` is rebuilt per invocation from the calling tool's own contract, so
-   * each tool must receive its own declared hint from the same service throw site.
+   * The service throws only `reason: 'not_found'`; the framework fills the hint from the
+   * calling tool's own contract, so each tool must receive its own declared hint from the
+   * same service throw site.
    */
   it.each([
     ['nonprofit_get_organization', nonprofitGetOrganization],
