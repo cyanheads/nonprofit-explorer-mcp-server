@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: nonprofit-explorer-mcp-server
-abstract: "MCP server for US nonprofit financials via ProPublica — IRS Form 990 data for 1.8M+ tax-exempt organizations."
+abstract: "MCP server for US nonprofit financials via ProPublica: IRS Form 990 data for 1.8M+ tax-exempt organizations."
 type: software
 authors:
   - family-names: Hand
