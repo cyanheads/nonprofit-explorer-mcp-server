@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.10](changelog/0.1.x/0.1.10.md) — 2026-10-08
+
+Adopts @cyanheads/mcp-ts-core ^0.13.14: an integer sent for query, a numeric-string page, and null optional filters are now repaired instead of rejected, and every tool error carries a request ID. The Docker image installs dependencies in a build-platform stage, and the MCP Registry HTTP entry now starts the HTTP transport.
+
 ## [0.1.9](changelog/0.1.x/0.1.9.md) — 2026-09-20
 
 Adopts @cyanheads/mcp-ts-core ^0.13.6 — a rejected tool call now names the reason and carries a schema-derived recovery hint, tool error text states the reason and retryability, unknown and misspelled argument keys are repaired before a call fails, and a mid-flight cancellation classifies RequestCancelled.
