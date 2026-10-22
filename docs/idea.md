@@ -30,7 +30,7 @@ NTEE codes classify the sector (arts, education, health, human services, …); 5
 ## Tool Surface (sketch)
 
 ```
-nonprofit_search          — find tax-exempt orgs by name/keyword. Filters: state, NTEE
+nonprofit_search_organizations          — find tax-exempt orgs by name/keyword. Filters: state, NTEE
                             category (arts, education, health, human-services, ...),
                             501(c) subtype. Returns EIN, name, city/state, NTEE code,
                             and subsection. Required first step — profiles key on EIN.

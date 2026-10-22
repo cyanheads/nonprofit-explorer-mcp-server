@@ -1,6 +1,6 @@
 # nonprofit-explorer-mcp-server - Directory Structure
 
-Generated on: 2026-10-09 04:21:33
+Generated on: 2026-10-22 03:15:15
 
 ```text
 nonprofit-explorer-mcp-server/
@@ -144,7 +144,7 @@ nonprofit-explorer-mcp-server/
 │   │       └── definitions/
 │   │           ├── nonprofit-get-filings.tool.ts
 │   │           ├── nonprofit-get-organization.tool.ts
-│   │           └── nonprofit-search.tool.ts
+│   │           └── nonprofit-search-organizations.tool.ts
 │   ├── services/
 │   │   └── nonprofit-explorer/
 │   │       ├── nonprofit-explorer-service.ts
@@ -159,7 +159,7 @@ nonprofit-explorer-mcp-server/
 │   └── tools/
 │       ├── nonprofit-get-filings.tool.test.ts
 │       ├── nonprofit-get-organization.tool.test.ts
-│       ├── nonprofit-search.tool.test.ts
+│       ├── nonprofit-search-organizations.tool.test.ts
 │       ├── tool-descriptions.test.ts
 │       └── tool-wire-contract.test.ts
 ├── .dockerignore

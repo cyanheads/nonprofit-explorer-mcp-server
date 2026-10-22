@@ -87,7 +87,7 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
           .describe('EIN as string, with or without hyphen (e.g., "53-0196605" or "530196605").'),
       ])
       .describe(
-        'Employer Identification Number. Use nonprofit_search to resolve an org name to its EIN.',
+        'Employer Identification Number. Use nonprofit_search_organizations to resolve an org name to its EIN.',
       ),
   }),
 
@@ -141,24 +141,50 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
               .number()
               .nullable()
               .describe(
-                'Net assets/fund balances (end of year) in USD. From totnetassetend. Null when not extracted.',
+                'Net assets/fund balances (end of year) in USD. From totnetassetend (990), totnetassetsend (990-EZ), or tfundnworth (990-PF). Null when not extracted.',
               ),
             contributions_and_grants: z
               .number()
               .nullable()
               .describe(
-                'Total contributions and grants (totcntrbgfts). 990/990-EZ only; null for 990-PF.',
+                'Contributions and grants in USD: totcntrbgfts (990), totcntrbs (990-EZ), or grscontrgifts (990-PF). Null when not extracted.',
               ),
             program_service_revenue: z
               .number()
               .nullable()
               .describe(
-                'Program service revenue (totprgmrevnue). 990/990-EZ only; null for 990-PF.',
+                'Program service revenue in USD: totprgmrevnue (990) or prgmservrev (990-EZ). Not applicable for 990-PF.',
               ),
             investment_income: z
               .number()
               .nullable()
-              .describe('Investment income (invstmntinc). 990/990-EZ only; null for 990-PF.'),
+              .describe(
+                'Investment income in USD: invstmntinc (990), othrinvstinc (990-EZ), or intrstrvnue plus dividndsamt (990-PF Part I column (a), lines 3–4: savings interest plus dividends and securities interest; excludes capital gains, rents, and net investment income). PF requires both components; null when not extracted.',
+              ),
+            grants_paid: z
+              .number()
+              .nullable()
+              .describe(
+                '990-PF contributions, gifts, and grants paid in USD, Part I line 25 column (a), contrpdpbks. Null for other forms or when not extracted.',
+              ),
+            distributable_amount: z
+              .number()
+              .nullable()
+              .describe(
+                '990-PF required distributable amount in USD, Part X line 7, distribamt. A payout requirement, not actual payments or a compliance measure. Null for other forms or when not extracted.',
+              ),
+            fair_market_value_assets: z
+              .number()
+              .nullable()
+              .describe(
+                '990-PF end-of-year fair-market-value assets in USD, header Item I, fairmrktvalamt. Null for other forms or when not extracted.',
+              ),
+            net_investment_income: z
+              .number()
+              .nullable()
+              .describe(
+                '990-PF net investment income in USD, Part I line 27b, netinvstinc. Null for other forms or when not extracted.',
+              ),
             program_expense_ratio: z
               .object({
                 ratio: z
@@ -265,12 +291,28 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
 
   errors: [
     {
+      reason: 'timeout',
+      code: JsonRpcErrorCode.Timeout,
+      thrownBy: 'service',
+      when: 'A ProPublica API attempt expires before its response body finishes',
+      retryable: true,
+      recovery: 'Wait a moment and retry the request.',
+    },
+    {
+      reason: 'retry_deadline_exceeded',
+      code: JsonRpcErrorCode.Timeout,
+      thrownBy: 'service',
+      when: 'The complete ProPublica API retry exchange exceeds its deadline',
+      retryable: true,
+      recovery: 'Wait a moment and retry the request.',
+    },
+    {
       reason: 'not_found',
       code: JsonRpcErrorCode.NotFound,
       thrownBy: 'service',
       when: 'The EIN does not correspond to a known organization in the Nonprofit Explorer database',
       recovery:
-        'Verify the EIN with nonprofit_search. Use the integer EIN value (leading zeros stripped).',
+        'Verify the EIN with nonprofit_search_organizations. Use the integer EIN value (leading zeros stripped).',
     },
     {
       reason: 'upstream_error',
@@ -288,7 +330,6 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
 
     const svc = getNonprofitExplorerService();
 
-    // Service throws notFound (reason: 'not_found') or serviceUnavailable (reason: 'upstream_error').
     const raw = await svc.getOrganization(ein, ctx);
 
     // Service validates organization presence and throws notFound before returning — safe to assert.
@@ -326,10 +367,27 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
       total_expenses: f.totfuncexpns ?? null,
       total_assets: f.totassetsend ?? null,
       total_liabilities: f.totliabend ?? null,
-      net_assets: f.totnetassetend ?? null,
-      contributions_and_grants: f.totcntrbgfts ?? null,
-      program_service_revenue: f.totprgmrevnue ?? null,
-      investment_income: f.invstmntinc ?? null,
+      net_assets:
+        (f.formtype === 2
+          ? f.tfundnworth
+          : f.formtype === 1
+            ? f.totnetassetsend
+            : f.totnetassetend) ?? null,
+      contributions_and_grants:
+        (f.formtype === 2 ? f.grscontrgifts : f.formtype === 1 ? f.totcntrbs : f.totcntrbgfts) ??
+        null,
+      program_service_revenue:
+        (f.formtype === 2 ? null : f.formtype === 1 ? f.prgmservrev : f.totprgmrevnue) ?? null,
+      investment_income:
+        f.formtype === 2
+          ? f.intrstrvnue != null && f.dividndsamt != null
+            ? f.intrstrvnue + f.dividndsamt
+            : null
+          : ((f.formtype === 1 ? f.othrinvstinc : f.invstmntinc) ?? null),
+      grants_paid: f.formtype === 2 ? (f.contrpdpbks ?? null) : null,
+      distributable_amount: f.formtype === 2 ? (f.distribamt ?? null) : null,
+      fair_market_value_assets: f.formtype === 2 ? (f.fairmrktvalamt ?? null) : null,
+      net_investment_income: f.formtype === 2 ? (f.netinvstinc ?? null) : null,
       /**
        * Not derived. `totfuncexpns` is Form 990 Part IX column (A); the program-service
        * total is column (B), which ProPublica does not return, and Part IX allocates
@@ -395,22 +453,38 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
       lines.push(`**Liabilities (EoY):** ${money(f.total_liabilities)}`);
       lines.push(`**Net Assets (EoY):** ${money(f.net_assets)}`);
 
-      /**
-       * The revenue-breakdown fields are 990/990-EZ line items that do not exist on a
-       * 990-PF at all. "Not applicable for 990-PF" and "not extracted" are different
-       * facts about the same null, so the form type picks the label.
-       */
-      const breakdownAbsent =
+      /** Program-service revenue has no corresponding 990-PF line item. */
+      const programRevenueAbsent =
         f.form_type === '990-PF' ? notApplicableFor(f.form_type) : NOT_EXTRACTED;
       lines.push('');
       lines.push('### Revenue Breakdown');
+      lines.push(`**Contributions & Grants:** ${money(f.contributions_and_grants)}`);
       lines.push(
-        `**Contributions & Grants:** ${money(f.contributions_and_grants, breakdownAbsent)}`,
+        `**Program Service Revenue:** ${money(f.program_service_revenue, programRevenueAbsent)}`,
+      );
+      lines.push(`**Investment Income:** ${money(f.investment_income)}`);
+      if (f.form_type === '990-PF') {
+        lines.push(
+          '990-PF investment income is Part I column (a), lines 3–4: savings interest plus dividends and securities interest; excludes capital gains, rents, and net investment income. Both components must be extracted.',
+        );
+      }
+      const pfAbsent = f.form_type === '990-PF' ? NOT_EXTRACTED : notApplicableFor(f.form_type);
+      lines.push('');
+      lines.push('### 990-PF Foundation Financials');
+      lines.push(`**Grants Paid (Part I line 25 column (a)):** ${money(f.grants_paid, pfAbsent)}`);
+      lines.push(
+        `**Distributable Amount (required, Part X line 7):** ${money(f.distributable_amount, pfAbsent)}`,
       );
       lines.push(
-        `**Program Service Revenue:** ${money(f.program_service_revenue, breakdownAbsent)}`,
+        `**Fair-Market-Value Assets (EoY, Item I):** ${money(f.fair_market_value_assets, pfAbsent)}`,
       );
-      lines.push(`**Investment Income:** ${money(f.investment_income, breakdownAbsent)}`);
+      lines.push(
+        `**Net Investment Income (Part I line 27b):** ${money(f.net_investment_income, pfAbsent)}`,
+      );
+      if (f.form_type === '990-PF')
+        lines.push(
+          'The distributable amount is a payout requirement, not actual payments or a compliance measure.',
+        );
 
       const r = f.program_expense_ratio;
       lines.push('');

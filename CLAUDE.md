@@ -2,10 +2,10 @@
 
 **Server:** nonprofit-explorer-mcp-server
 **Version:** 0.1.10
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.14`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.15`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` ^2.2.0
-**Zod:** ^4.6.5
+**MCP SDK:** `@modelcontextprotocol/server` ^2.3.1
+**Zod:** ^4.6.7
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
 
@@ -32,7 +32,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getNonprofitExplorerService } from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
 
-export const nonprofitSearch = tool('nonprofit_search', {
+export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations', {
   title: 'Search Nonprofits',
   description: 'Search 1.8M+ IRS-recognized tax-exempt organizations by name, keyword, city, or phrase.',
   annotations: { readOnlyHint: true },
@@ -125,7 +125,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 errors: [
   { reason: 'not_found', code: JsonRpcErrorCode.NotFound,
     when: 'EIN does not correspond to a known org',
-    recovery: 'Verify the EIN with nonprofit_search. Use the integer EIN value.' },
+    recovery: 'Verify the EIN with nonprofit_search_organizations. Use the integer EIN value.' },
 ],
 async handler(input, ctx) {
   const org = await svc.getOrganization(normalizeEin(input.ein), ctx);
@@ -141,7 +141,7 @@ async handler(input, ctx) {
 ```ts
 import { notFound, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 throw notFound('Organization not found', { ein });
-throw serviceUnavailable('ProPublica API unavailable', { url }, { cause: err });
+throw serviceUnavailable('ProPublica API unavailable', { reason: 'upstream_error' }, { cause: err });
 ```
 
 See framework CLAUDE.md and the `api-errors` skill for the full auto-classification table, all available factories, and the contract reference.
@@ -159,7 +159,7 @@ src/
       types.ts                          # Domain types (RawOrg, RawFiling, etc.)
   mcp-server/
     tools/definitions/
-      nonprofit-search.tool.ts          # nonprofit_search
+      nonprofit-search-organizations.tool.ts          # nonprofit_search_organizations
       nonprofit-get-organization.tool.ts# nonprofit_get_organization
       nonprofit-get-filings.tool.ts     # nonprofit_get_filings
 ```
@@ -170,8 +170,8 @@ src/
 
 | What | Convention | Example |
 |:-----|:-----------|:--------|
-| Files | kebab-case with suffix | `nonprofit-search.tool.ts` |
-| Tool/resource/prompt names | snake_case | `nonprofit_search` |
+| Files | kebab-case with suffix | `nonprofit-search-organizations.tool.ts` |
+| Tool/resource/prompt names | snake_case | `nonprofit_search_organizations` |
 | Directories | kebab-case | `src/services/nonprofit-explorer/` |
 | Descriptions | Single string or template literal, no `+` concatenation | `'Search orgs by name and filter.'` |
 

@@ -28,6 +28,10 @@ const makeFiling = (overrides: Partial<Filing> = {}): Filing => ({
   contributions_and_grants: 2_500_000,
   program_service_revenue: 400_000,
   investment_income: 100_000,
+  grants_paid: null,
+  distributable_amount: null,
+  fair_market_value_assets: null,
+  net_investment_income: null,
   program_expense_ratio: null,
   executive_compensation: {
     amount: 250_000,
@@ -486,7 +490,7 @@ describe('nonprofitGetFilings', () => {
             pdf_url: 'https://example.com/990ez-2021.pdf',
             totrevenue: 180_000,
             totfuncexpns: 160_000,
-            totcntrbgfts: 150_000,
+            totcntrbs: 150_000,
             compnsatncurrofcr: 40_000,
           },
           {
@@ -517,7 +521,7 @@ describe('nonprofitGetFilings', () => {
     expect(result.filings.map((f) => f.executive_compensation.amount)).toEqual([
       250_000, 40_000, 500_000,
     ]);
-    // The 990-PF year carries no 990-line contributions figure; the other two do.
+    // The 990-PF year omits contributions; each other year uses its form's field.
     expect(result.filings.map((f) => f.contributions_and_grants)).toEqual([
       2_500_000,
       150_000,
@@ -525,13 +529,12 @@ describe('nonprofitGetFilings', () => {
     ]);
 
     /**
-     * The same null means different things per year, and `format()` has to say which:
-     * "not applicable" on the 990-PF (the line does not exist on that form) versus
-     * "not extracted" elsewhere (the line exists and ProPublica has no value for it).
+     * Contributions exist on each form. A missing PF contribution is unextracted;
+     * only program-service revenue is inapplicable on that form.
      */
     const text = renderText(nonprofitGetFilings.format!(result));
     const pfSection = text.slice(text.indexOf('## FY 2020'));
-    expect(pfSection).toContain('**Contributions & Grants:** Not applicable for 990-PF');
+    expect(pfSection).toContain('**Contributions & Grants:** Not extracted');
     expect(pfSection).toContain('### Executive Compensation (990-PF)');
     expect(pfSection).toContain('**Total (compofficers):** $500,000');
     expect(text.slice(text.indexOf('## FY 2022'), text.indexOf('## FY 2021'))).toContain(
@@ -616,8 +619,8 @@ describe('nonprofitGetFilings', () => {
   });
 
   /**
-   * A 990-PF genuinely has no revenue-breakdown fields; a 990 whose breakdown was not
-   * extracted is a different fact. Collapsing both to one label loses that.
+   * Only program-service revenue is inapplicable on 990-PF; the other revenue
+   * fields can be absent from the extract without being inapplicable.
    */
   it('format distinguishes 990-PF inapplicable fields from unextracted ones', () => {
     const pf = renderText(
@@ -636,9 +639,9 @@ describe('nonprofitGetFilings', () => {
       ),
     );
     expect(pf).toContain('### Revenue Breakdown');
-    expect(pf).toContain('**Contributions & Grants:** Not applicable for 990-PF');
+    expect(pf).toContain('**Contributions & Grants:** Not extracted');
     expect(pf).toContain('**Program Service Revenue:** Not applicable for 990-PF');
-    expect(pf).toContain('**Investment Income:** Not applicable for 990-PF');
+    expect(pf).toContain('**Investment Income:** Not extracted');
     // net_assets is a core financial field, not form-type-specific.
     expect(pf).toContain('**Net Assets (EoY):** Not extracted');
 

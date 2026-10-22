@@ -86,7 +86,7 @@ function decodeIrsCode(
 export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
   title: 'Get Nonprofit Organization',
   description:
-    'Full profile for a single tax-exempt org by EIN: legal name, address, NTEE classification, 501(c) type, IRS ruling date, and a financial snapshot from the most recent Form 990 filing (revenue, expenses, assets, net assets, and the source PDF link). Also returns the IRS Business Master File standing — whether contributions are deductible, exemption status, and public-charity vs. private-foundation classification. Use nonprofit_search first if you only have an org name — this tool requires an EIN. Data lags 1–2 years; the tax year is shown prominently. Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
+    'Full profile for a single tax-exempt org by EIN: legal name, address, NTEE classification, 501(c) type, IRS ruling date, and a financial snapshot from the most recent Form 990 filing (revenue, expenses, assets, net assets, and the source PDF link). Also returns the IRS Business Master File standing — whether contributions are deductible, exemption status, and public-charity vs. private-foundation classification. Use nonprofit_search_organizations first if you only have an org name — this tool requires an EIN. Data lags 1–2 years; the tax year is shown prominently. Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
@@ -105,7 +105,7 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
           .describe('EIN as string, with or without hyphen (e.g., "53-0196605" or "530196605").'),
       ])
       .describe(
-        'Employer Identification Number. Accepts integer (530196605) or string with optional hyphen ("53-0196605"). Obtain from nonprofit_search results.',
+        'Employer Identification Number. Accepts integer (530196605) or string with optional hyphen ("53-0196605"). Obtain from nonprofit_search_organizations results.',
       ),
   }),
 
@@ -204,7 +204,7 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
           .number()
           .nullable()
           .describe(
-            'Net assets/fund balances (end of year) in USD. From totnetassetend. Null when not extracted.',
+            'Net assets/fund balances (end of year) in USD. From totnetassetend (990), totnetassetsend (990-EZ), or tfundnworth (990-PF). Null when not extracted.',
           ),
         pdf_url: z
           .string()
@@ -218,18 +218,39 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
         'Financial snapshot from the most recent Form 990. Null if no filings_with_data are available.',
       ),
     filing_count: z.number().describe('Total filings with extracted data on record.'),
+    filing_count_pdf_only: z
+      .number()
+      .describe(
+        'Total PDF-only filings without extracted financial data. Use nonprofit_get_filings for their PDF links.',
+      ),
     data_source: z.string().describe('ProPublica + IRS attribution text.'),
     propublica_url: z.string().describe('ProPublica Nonprofit Explorer URL for this org.'),
   }),
 
   errors: [
     {
+      reason: 'timeout',
+      code: JsonRpcErrorCode.Timeout,
+      thrownBy: 'service',
+      when: 'A ProPublica API attempt expires before its response body finishes',
+      retryable: true,
+      recovery: 'Wait a moment and retry the request.',
+    },
+    {
+      reason: 'retry_deadline_exceeded',
+      code: JsonRpcErrorCode.Timeout,
+      thrownBy: 'service',
+      when: 'The complete ProPublica API retry exchange exceeds its deadline',
+      retryable: true,
+      recovery: 'Wait a moment and retry the request.',
+    },
+    {
       reason: 'not_found',
       code: JsonRpcErrorCode.NotFound,
       thrownBy: 'service',
       when: 'The EIN does not correspond to a known organization in the Nonprofit Explorer database',
       recovery:
-        'Verify the EIN with nonprofit_search. EINs with leading zeros are stored without them — try the integer value.',
+        'Verify the EIN with nonprofit_search_organizations. EINs with leading zeros are stored without them — try the integer value.',
     },
     {
       reason: 'upstream_error',
@@ -247,8 +268,6 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
 
     const svc = getNonprofitExplorerService();
 
-    // Service throws notFound (with reason: 'not_found') or serviceUnavailable (reason: 'upstream_error')
-    // propagated unchanged by the framework auto-classifier.
     const raw = await svc.getOrganization(ein, ctx);
 
     // Service validates organization presence and throws notFound before returning — safe to assert.
@@ -268,7 +287,12 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
           total_expenses: latest.totfuncexpns ?? null,
           total_assets: latest.totassetsend ?? null,
           total_liabilities: latest.totliabend ?? null,
-          net_assets: latest.totnetassetend ?? null,
+          net_assets:
+            (latest.formtype === 2
+              ? latest.tfundnworth
+              : latest.formtype === 1
+                ? latest.totnetassetsend
+                : latest.totnetassetend) ?? null,
           pdf_url: latest.pdf_url ?? null,
         }
       : null;
@@ -297,6 +321,7 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       bmf_tax_period: org.tax_period ?? null,
       latest_filing: latestFiling,
       filing_count: filings.length,
+      filing_count_pdf_only: raw.filings_without_data?.length ?? 0,
       data_source: raw.data_source ?? 'ProPublica Nonprofit Explorer, IRS Form 990 data.',
       propublica_url: `https://projects.propublica.org/nonprofits/organizations/${einNum}`,
     };
@@ -333,7 +358,8 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
         `**ZIP:** ${result.zipcode ?? NOT_ON_RECORD}`,
     );
 
-    lines.push(`**Filings on record:** ${result.filing_count}`);
+    lines.push(`**Filings with extracted data:** ${result.filing_count}`);
+    lines.push(`**PDF-only filings:** ${result.filing_count_pdf_only}`);
     lines.push('');
     lines.push(`**Profile:** ${result.propublica_url}`);
 
@@ -348,6 +374,11 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       lines.push(`**Liabilities:** ${money(f.total_liabilities)}`);
       lines.push(`**Net Assets:** ${money(f.net_assets)}`);
       lines.push(`**Source 990 PDF:** ${f.pdf_url ?? 'Not yet available for this period'}`);
+    } else if (result.filing_count_pdf_only > 0) {
+      lines.push('');
+      lines.push(
+        '*Only PDF-only filings are available; no extracted financial snapshot. Use nonprofit_get_filings for PDF links.*',
+      );
     } else {
       lines.push('');
       lines.push('*No Form 990 data on file. Org may file Form 990N (under $50K revenue).*');

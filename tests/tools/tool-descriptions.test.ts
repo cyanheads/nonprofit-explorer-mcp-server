@@ -7,9 +7,9 @@ import { z } from '@cyanheads/mcp-ts-core';
 import { describe, expect, it } from 'vitest';
 import { nonprofitGetFilings } from '@/mcp-server/tools/definitions/nonprofit-get-filings.tool.js';
 import { nonprofitGetOrganization } from '@/mcp-server/tools/definitions/nonprofit-get-organization.tool.js';
-import { nonprofitSearch } from '@/mcp-server/tools/definitions/nonprofit-search.tool.js';
+import { nonprofitSearchOrganizations } from '@/mcp-server/tools/definitions/nonprofit-search-organizations.tool.js';
 
-const tools = [nonprofitSearch, nonprofitGetOrganization, nonprofitGetFilings];
+const tools = [nonprofitSearchOrganizations, nonprofitGetOrganization, nonprofitGetFilings];
 
 /** Every `description` the emitted JSON Schema carries, at any depth. */
 function collectDescriptions(node: unknown, out: string[]): void {

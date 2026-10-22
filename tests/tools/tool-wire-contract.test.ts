@@ -10,7 +10,7 @@ import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nonprofitGetFilings } from '@/mcp-server/tools/definitions/nonprofit-get-filings.tool.js';
 import { nonprofitGetOrganization } from '@/mcp-server/tools/definitions/nonprofit-get-organization.tool.js';
-import { nonprofitSearch } from '@/mcp-server/tools/definitions/nonprofit-search.tool.js';
+import { nonprofitSearchOrganizations } from '@/mcp-server/tools/definitions/nonprofit-search-organizations.tool.js';
 import * as svcModule from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
 
 /** The one text block a `structuredContent` failure mirrors into `content[]`. */
@@ -47,7 +47,7 @@ describe('tool wire contract', () => {
    * query parameters, so none opts back out with `.passthrough()` / `.catchall()`.
    */
   describe.each([
-    { tool: nonprofitSearch, valid: { query: 'red cross', page: 0 } },
+    { tool: nonprofitSearchOrganizations, valid: { query: 'red cross', page: 0 } },
     { tool: nonprofitGetOrganization, valid: { ein: 530196605 } },
     { tool: nonprofitGetFilings, valid: { ein: 530196605 } },
   ])('$tool.name', ({ tool, valid }) => {
@@ -99,7 +99,10 @@ describe('tool wire contract', () => {
    * a success carries no `error`, and a failure carries no success field.
    */
   it('puts the success fields and the enrichment notice on one branch, with no error key', async () => {
-    const result = await runToolContract(nonprofitSearch, { query: 'xyzzy_no_match', page: 0 });
+    const result = await runToolContract(nonprofitSearchOrganizations, {
+      query: 'xyzzy_no_match',
+      page: 0,
+    });
 
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toMatchObject({
@@ -112,10 +115,12 @@ describe('tool wire contract', () => {
 
   it('puts a declared failure on the error branch alone, carrying reason and recovery', async () => {
     // Compared against the contract rather than a literal, so a reword cannot drift.
-    const declared = nonprofitSearch.errors?.find((e) => e.reason === 'invalid_state')?.recovery;
+    const declared = nonprofitSearchOrganizations.errors?.find(
+      (e) => e.reason === 'invalid_state',
+    )?.recovery;
     expect(declared).toBeTypeOf('string');
 
-    const result = await runToolContract(nonprofitSearch, {
+    const result = await runToolContract(nonprofitSearchOrganizations, {
       query: 'food',
       state: 'XX',
       page: 0,

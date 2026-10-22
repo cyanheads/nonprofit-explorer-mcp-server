@@ -10,6 +10,7 @@ import {
   McpError,
   notFound,
   serviceUnavailable,
+  timeout,
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
@@ -18,6 +19,13 @@ import type { RawOrgResponse, RawSearchResponse, SearchParams } from './types.js
 
 const BASE_URL = 'https://projects.propublica.org/nonprofits/api/v2';
 const FETCH_TIMEOUT_MS = 15_000;
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 500;
+const RETRY_JITTER = 0.25;
+/** Retain the existing four-attempt envelope, including maximum jittered backoffs. */
+const REQUEST_DEADLINE_MS =
+  FETCH_TIMEOUT_MS * (MAX_RETRIES + 1) +
+  RETRY_BASE_DELAY_MS * (2 ** MAX_RETRIES - 1) * (1 + RETRY_JITTER);
 
 /** Search page size applied by ProPublica; not configurable through the API. */
 const SEARCH_RESULTS_PER_PAGE = 25;
@@ -36,30 +44,21 @@ export class NonprofitExplorerService {
   constructor(_config: AppConfig, _storage: StorageService) {}
 
   /**
-   * Fetch a URL with timeout, tolerating specific non-2xx statuses instead of throwing.
-   * Returns `{ status, text }` — caller decides whether the status is an error.
-   * Throws `serviceUnavailable` on network errors or unexpected non-JSON responses.
+   * Read a response within the attempt timeout, tolerating the caller's named statuses.
+   * Caller cancellation propagates unchanged; attempt expiry throws Timeout, while
+   * network failures and unexpected statuses throw ServiceUnavailable.
    */
   private async fetchTolerant(
     url: string,
     toleratedStatuses: number[],
-    ctx: Context,
+    signal: AbortSignal,
   ): Promise<{ status: number; text: string }> {
+    signal.throwIfAborted();
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    // Forward caller's cancellation signal to the AbortController
-    if (ctx.signal) {
-      if (ctx.signal.aborted) {
-        clearTimeout(timeoutId);
-        controller.abort(ctx.signal.reason);
-      } else {
-        ctx.signal.addEventListener('abort', () => controller.abort(ctx.signal.reason), {
-          once: true,
-          signal: controller.signal,
-        });
-      }
-    }
+    const timeoutReason = new DOMException('ProPublica request timed out.', 'TimeoutError');
+    const timeoutId = setTimeout(() => controller.abort(timeoutReason), FETCH_TIMEOUT_MS);
+    const forwardAbort = () => controller.abort(signal.reason);
+    signal.addEventListener('abort', forwardAbort, { once: true });
 
     try {
       const response = await fetch(url, {
@@ -68,11 +67,12 @@ export class NonprofitExplorerService {
       });
 
       const text = await response.text();
+      signal.throwIfAborted();
+      controller.signal.throwIfAborted();
 
       // Non-2xx that isn't in the tolerated list is a service error
       if (!response.ok && !toleratedStatuses.includes(response.status)) {
         throw serviceUnavailable(`ProPublica API returned unexpected status ${response.status}.`, {
-          url,
           statusCode: response.status,
           reason: 'upstream_error',
         });
@@ -80,20 +80,26 @@ export class NonprofitExplorerService {
 
       return { status: response.status, text };
     } catch (err) {
+      if (signal.aborted) throw signal.reason;
+      if (controller.signal.reason === timeoutReason) {
+        throw timeout('ProPublica API request timed out.', { reason: 'timeout' }, { cause: err });
+      }
       if (err instanceof McpError) throw err;
       throw serviceUnavailable(
-        `Network error reaching ProPublica API: ${err instanceof Error ? err.message : String(err)}`,
-        { url, reason: 'upstream_error' },
+        'Network error reaching ProPublica API.',
+        { reason: 'upstream_error' },
+        { cause: err },
       );
     } finally {
       clearTimeout(timeoutId);
+      signal.removeEventListener('abort', forwardAbort);
     }
   }
 
   /** Search organizations by keyword and optional filters. */
   search(params: SearchParams, ctx: Context): Promise<RawSearchResponse> {
     return withRetry(
-      async () => {
+      async ({ signal }) => {
         const url = new URL(`${BASE_URL}/search.json`);
         if (params.query) url.searchParams.set('q', params.query);
         if (params.state) url.searchParams.set('state[id]', params.state);
@@ -101,7 +107,7 @@ export class NonprofitExplorerService {
         if (params.subsection_code) url.searchParams.set('c_code[id]', params.subsection_code);
         url.searchParams.set('page', String(params.page));
 
-        ctx.log.debug('Searching nonprofits', { url: url.toString() });
+        ctx.log.debug('Searching nonprofits', { page: params.page });
 
         /**
          * ProPublica answers both a zero-match query and a page past `num_pages` with
@@ -110,8 +116,8 @@ export class NonprofitExplorerService {
          * `total_results` separates zero matches from an exhausted page, and only the
          * 400 shape is a hard boundary the caller must correct.
          */
-        const { status, text } = await this.fetchTolerant(url.toString(), [400, 404], ctx);
-        const data = this.parseJson<RawSearchResponse>(text, url.toString());
+        const { status, text } = await this.fetchTolerant(url.toString(), [400, 404], signal);
+        const data = this.parseJson<RawSearchResponse>(text);
 
         if (status === 400) {
           if (/pagination/i.test(data.error ?? '')) {
@@ -122,7 +128,6 @@ export class NonprofitExplorerService {
             );
           }
           throw serviceUnavailable('ProPublica API rejected the search request.', {
-            url: url.toString(),
             statusCode: status,
             reason: 'upstream_error',
           });
@@ -133,8 +138,11 @@ export class NonprofitExplorerService {
       {
         operation: 'NonprofitExplorer.search',
         context: ctx,
-        baseDelayMs: 500,
+        baseDelayMs: RETRY_BASE_DELAY_MS,
+        maxRetries: MAX_RETRIES,
+        jitter: RETRY_JITTER,
         signal: ctx.signal,
+        deadlineMs: REQUEST_DEADLINE_MS,
       },
     );
   }
@@ -145,16 +153,16 @@ export class NonprofitExplorerService {
    */
   getOrganization(ein: number, ctx: Context): Promise<RawOrgResponse> {
     return withRetry(
-      async () => {
+      async ({ signal }) => {
         const url = `${BASE_URL}/organizations/${ein}.json`;
         ctx.log.debug('Fetching nonprofit org', { ein });
 
         // Tolerate 404 — the API returns HTTP 404 + a JSON body for "org not found". We
         // inspect the body before deciding how to classify the error, rather than letting
         // the network layer throw a generic FetchHttpError.
-        const { status, text } = await this.fetchTolerant(url, [404], ctx);
+        const { status, text } = await this.fetchTolerant(url, [404], signal);
 
-        const data = this.parseJson<RawOrgResponse>(text, url);
+        const data = this.parseJson<RawOrgResponse>(text);
         const org = data.organization;
 
         /**
@@ -175,25 +183,27 @@ export class NonprofitExplorerService {
       {
         operation: 'NonprofitExplorer.getOrganization',
         context: ctx,
-        baseDelayMs: 500,
+        baseDelayMs: RETRY_BASE_DELAY_MS,
+        maxRetries: MAX_RETRIES,
+        jitter: RETRY_JITTER,
         signal: ctx.signal,
+        deadlineMs: REQUEST_DEADLINE_MS,
       },
     );
   }
 
   /** Parse JSON from an upstream response; throws serviceUnavailable on HTML error pages. */
-  private parseJson<T>(text: string, url: string): T {
+  private parseJson<T>(text: string): T {
     if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(text)) {
       throw serviceUnavailable(
         'ProPublica API returned HTML instead of JSON — likely a transient server error.',
-        { url, reason: 'upstream_error' },
+        { reason: 'upstream_error' },
       );
     }
     try {
       return JSON.parse(text) as T;
     } catch {
       throw serviceUnavailable('ProPublica API returned unparseable response.', {
-        url,
         reason: 'upstream_error',
       });
     }

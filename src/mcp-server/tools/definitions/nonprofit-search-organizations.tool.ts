@@ -1,6 +1,6 @@
 /**
  * @fileoverview Search 1.8M+ tax-exempt organizations by name/keyword with optional filters.
- * @module mcp-server/tools/definitions/nonprofit-search.tool
+ * @module mcp-server/tools/definitions/nonprofit-search-organizations.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
@@ -22,7 +22,7 @@ const NOT_ON_RECORD = 'Not on record';
 /** No IRS classification code on record for this organization. */
 const NOT_CLASSIFIED = 'Not classified';
 
-export const nonprofitSearch = tool('nonprofit_search', {
+export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations', {
   title: 'Search Nonprofits',
   description:
     'Search 1.8M+ IRS-recognized tax-exempt organizations by name, keyword, city, or phrase. Optionally narrow by US state, NTEE major sector (1–10), or 501(c) subsection type. Returns EINs — pass them to nonprofit_get_organization or nonprofit_get_filings for details. Results are paginated at 25 per page; use the page parameter and num_pages to paginate. Total results cap at 10,000 in the API; if total_results === 10000 the actual count may be higher. A zero-match query and a page past the last one both return an empty organizations array with a notice rather than an error; only a page whose offset reaches that 10,000 cap is refused. Supports quoted phrases ("Red Cross"), required terms (+evanston), excluded terms (-dental). Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
@@ -171,6 +171,22 @@ export const nonprofitSearch = tool('nonprofit_search', {
   },
 
   errors: [
+    {
+      reason: 'timeout',
+      code: JsonRpcErrorCode.Timeout,
+      thrownBy: 'service',
+      when: 'A ProPublica API attempt expires before its response body finishes',
+      retryable: true,
+      recovery: 'Wait a moment and retry the request.',
+    },
+    {
+      reason: 'retry_deadline_exceeded',
+      code: JsonRpcErrorCode.Timeout,
+      thrownBy: 'service',
+      when: 'The complete ProPublica API retry exchange exceeds its deadline',
+      retryable: true,
+      recovery: 'Wait a moment and retry the request.',
+    },
     {
       reason: 'invalid_state',
       code: JsonRpcErrorCode.ValidationError,

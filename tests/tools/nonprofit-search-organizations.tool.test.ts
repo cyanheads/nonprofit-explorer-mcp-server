@@ -1,12 +1,12 @@
 /**
- * @fileoverview Tests for the nonprofit_search tool.
- * @module tests/tools/nonprofit-search.tool.test
+ * @fileoverview Tests for the nonprofit_search_organizations tool.
+ * @module tests/tools/nonprofit-search-organizations.tool.test
  */
 
 import { JsonRpcErrorCode, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { nonprofitSearch } from '@/mcp-server/tools/definitions/nonprofit-search.tool.js';
+import { nonprofitSearchOrganizations } from '@/mcp-server/tools/definitions/nonprofit-search-organizations.tool.js';
 import * as svcModule from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
 
 // Minimal raw search response mirroring the upstream shape
@@ -43,15 +43,15 @@ const mockSearch = (raw: object) => {
   return search;
 };
 
-describe('nonprofitSearch', () => {
+describe('nonprofitSearchOrganizations', () => {
   beforeEach(() => {
     mockSearch(makeRawResponse([sampleOrg]));
   });
 
   it('returns mapped organizations on a successful search', async () => {
-    const ctx = createMockContext({ errors: nonprofitSearch.errors });
-    const input = nonprofitSearch.input.parse({ query: 'red cross', page: 0 });
-    const result = await nonprofitSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
+    const input = nonprofitSearchOrganizations.input.parse({ query: 'red cross', page: 0 });
+    const result = await nonprofitSearchOrganizations.handler(input, ctx);
 
     expect(result.organizations).toHaveLength(1);
     expect(result.organizations[0]!.ein).toBe(530196605);
@@ -64,9 +64,9 @@ describe('nonprofitSearch', () => {
   it('surfaces upstream per_page and page_offset', async () => {
     mockSearch(makeRawResponse([sampleOrg], { cur_page: 2, page_offset: 50, total_results: 60 }));
 
-    const ctx = createMockContext({ errors: nonprofitSearch.errors });
-    const input = nonprofitSearch.input.parse({ query: 'red cross', page: 2 });
-    const result = await nonprofitSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
+    const input = nonprofitSearchOrganizations.input.parse({ query: 'red cross', page: 2 });
+    const result = await nonprofitSearchOrganizations.handler(input, ctx);
 
     expect(result.per_page).toBe(25);
     expect(result.page_offset).toBe(50);
@@ -75,9 +75,9 @@ describe('nonprofitSearch', () => {
   it('returns a zero-match search as a success with an explanatory notice', async () => {
     mockSearch(makeRawResponse([], { num_pages: 0, total_results: 0 }));
 
-    const ctx = createMockContext({ errors: nonprofitSearch.errors });
-    const input = nonprofitSearch.input.parse({ query: 'xyzzy_no_match', page: 0 });
-    const result = await nonprofitSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
+    const input = nonprofitSearchOrganizations.input.parse({ query: 'xyzzy_no_match', page: 0 });
+    const result = await nonprofitSearchOrganizations.handler(input, ctx);
 
     expect(result.organizations).toEqual([]);
     expect(result.total_results).toBe(0);
@@ -94,9 +94,9 @@ describe('nonprofitSearch', () => {
       }),
     );
 
-    const ctx = createMockContext({ errors: nonprofitSearch.errors });
-    const input = nonprofitSearch.input.parse({ query: 'hospital', page: 245 });
-    const result = await nonprofitSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
+    const input = nonprofitSearchOrganizations.input.parse({ query: 'hospital', page: 245 });
+    const result = await nonprofitSearchOrganizations.handler(input, ctx);
 
     expect(result.organizations).toEqual([]);
     expect(result.total_results).toBe(6111);
@@ -107,9 +107,9 @@ describe('nonprofitSearch', () => {
   });
 
   it('leaves a populated page free of a notice', async () => {
-    const ctx = createMockContext({ errors: nonprofitSearch.errors });
-    const input = nonprofitSearch.input.parse({ query: 'red cross', page: 0 });
-    await nonprofitSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
+    const input = nonprofitSearchOrganizations.input.parse({ query: 'red cross', page: 0 });
+    await nonprofitSearchOrganizations.handler(input, ctx);
 
     expect(getEnrichment(ctx).notice).toBeUndefined();
   });
@@ -122,9 +122,9 @@ describe('nonprofitSearch', () => {
   it('carries the result-cap caveat on a populated page at the ceiling', async () => {
     mockSearch(makeRawResponse([sampleOrg], { num_pages: 400, total_results: 10_000 }));
 
-    const ctx = createMockContext({ errors: nonprofitSearch.errors });
-    const input = nonprofitSearch.input.parse({ query: 'inc', page: 0 });
-    const result = await nonprofitSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
+    const input = nonprofitSearchOrganizations.input.parse({ query: 'inc', page: 0 });
+    const result = await nonprofitSearchOrganizations.handler(input, ctx);
 
     expect(result.total_results).toBe(10_000);
     const notice = String(getEnrichment(ctx).notice);
@@ -143,9 +143,9 @@ describe('nonprofitSearch', () => {
       }),
     );
 
-    const ctx = createMockContext({ errors: nonprofitSearch.errors });
-    const input = nonprofitSearch.input.parse({ query: 'inc', page: 400 });
-    await nonprofitSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
+    const input = nonprofitSearchOrganizations.input.parse({ query: 'inc', page: 400 });
+    await nonprofitSearchOrganizations.handler(input, ctx);
 
     // ctx.enrich.notice is last-wins — two calls would drop the first fact entirely.
     const notice = String(getEnrichment(ctx).notice);
@@ -157,9 +157,9 @@ describe('nonprofitSearch', () => {
   it('emits no cap notice below the ceiling', async () => {
     mockSearch(makeRawResponse([sampleOrg], { num_pages: 400, total_results: 9_999 }));
 
-    const ctx = createMockContext({ errors: nonprofitSearch.errors });
-    const input = nonprofitSearch.input.parse({ query: 'inc', page: 0 });
-    await nonprofitSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
+    const input = nonprofitSearchOrganizations.input.parse({ query: 'inc', page: 0 });
+    await nonprofitSearchOrganizations.handler(input, ctx);
 
     expect(getEnrichment(ctx).notice).toBeUndefined();
   });
@@ -169,9 +169,9 @@ describe('nonprofitSearch', () => {
       makeRawResponse([], { cur_page: 1, num_pages: 1, page_offset: 25, total_results: 3 }),
     );
 
-    const ctx = createMockContext({ errors: nonprofitSearch.errors });
-    const input = nonprofitSearch.input.parse({ query: 'obscure org', page: 1 });
-    await nonprofitSearch.handler(input, ctx);
+    const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
+    const input = nonprofitSearchOrganizations.input.parse({ query: 'obscure org', page: 1 });
+    await nonprofitSearchOrganizations.handler(input, ctx);
 
     const notice = String(getEnrichment(ctx).notice);
     expect(notice).toContain('1 page');
@@ -190,24 +190,24 @@ describe('nonprofitSearch', () => {
       getOrganization: vi.fn(),
     } as unknown as svcModule.NonprofitExplorerService);
 
-    const ctx = createMockContext({ errors: nonprofitSearch.errors });
-    const input = nonprofitSearch.input.parse({ query: 'test', page: 0 });
-    await expect(nonprofitSearch.handler(input, ctx)).rejects.toMatchObject({
+    const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
+    const input = nonprofitSearchOrganizations.input.parse({ query: 'test', page: 0 });
+    await expect(nonprofitSearchOrganizations.handler(input, ctx)).rejects.toMatchObject({
       code: JsonRpcErrorCode.ServiceUnavailable,
       data: { reason: 'upstream_error' },
     });
   });
 
   it('echoes active filters in output', async () => {
-    const ctx = createMockContext({ errors: nonprofitSearch.errors });
-    const input = nonprofitSearch.input.parse({
+    const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
+    const input = nonprofitSearchOrganizations.input.parse({
       query: 'hospitals',
       state: 'WA',
       ntee_category: '4',
       subsection_code: '3',
       page: 0,
     });
-    const result = await nonprofitSearch.handler(input, ctx);
+    const result = await nonprofitSearchOrganizations.handler(input, ctx);
     expect(result.active_filters.state).toBe('WA');
     expect(result.active_filters.ntee_category).toBe('4');
     expect(result.active_filters.subsection_code).toBe('3');
@@ -218,9 +218,9 @@ describe('nonprofitSearch', () => {
     async (state) => {
       const search = mockSearch(makeRawResponse([sampleOrg]));
 
-      const ctx = createMockContext({ errors: nonprofitSearch.errors });
-      const input = nonprofitSearch.input.parse({ query: 'food', state, page: 0 });
-      const result = await nonprofitSearch.handler(input, ctx);
+      const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
+      const input = nonprofitSearchOrganizations.input.parse({ query: 'food', state, page: 0 });
+      const result = await nonprofitSearchOrganizations.handler(input, ctx);
 
       expect(search).toHaveBeenCalledWith(expect.objectContaining({ state: 'WA' }), ctx);
       expect(result.active_filters.state).toBe('WA');
@@ -230,14 +230,20 @@ describe('nonprofitSearch', () => {
   it('throws invalid_state for a well-formed code that is not a real postal code', async () => {
     const search = mockSearch(makeRawResponse([sampleOrg]));
     // Compared against the contract rather than a literal, so a reword can't drift.
-    const declared = nonprofitSearch.errors?.find((e) => e.reason === 'invalid_state')?.recovery;
+    const declared = nonprofitSearchOrganizations.errors?.find(
+      (e) => e.reason === 'invalid_state',
+    )?.recovery;
     expect(declared).toBeTypeOf('string');
 
     /**
      * Through `runToolContract`: the handler throws `ctx.fail('invalid_state', …)` without
      * a hint, and the framework fills the declared `recovery` on the way out.
      */
-    const result = await runToolContract(nonprofitSearch, { query: 'food', state: 'XX', page: 0 });
+    const result = await runToolContract(nonprofitSearchOrganizations, {
+      query: 'food',
+      state: 'XX',
+      page: 0,
+    });
     expect(result.isError).toBe(true);
     expect(
       (result.structuredContent as { error?: Record<string, unknown> } | undefined)?.error,
@@ -277,7 +283,7 @@ describe('nonprofitSearch', () => {
       },
       data_source: 'ProPublica Nonprofit Explorer',
     };
-    const blocks = nonprofitSearch.format!(output);
+    const blocks = nonprofitSearchOrganizations.format!(output);
     expect(blocks).toHaveLength(1);
     const block = blocks[0];
     expect(block?.type).toBe('text');
@@ -306,7 +312,7 @@ describe('nonprofitSearch', () => {
       },
       data_source: 'ProPublica Nonprofit Explorer',
     };
-    const blocks = nonprofitSearch.format!(output);
+    const blocks = nonprofitSearchOrganizations.format!(output);
     const block = blocks[0];
     const text = block?.type === 'text' ? block.text : '';
     expect(text).toContain('6,111');
@@ -333,7 +339,7 @@ describe('nonprofitSearch', () => {
       },
       data_source: 'ProPublica Nonprofit Explorer',
     };
-    const blocks = nonprofitSearch.format!(output);
+    const blocks = nonprofitSearchOrganizations.format!(output);
     const block = blocks[0];
     const text = block?.type === 'text' ? block.text : '';
     expect(text).toContain('10,000');
@@ -360,7 +366,7 @@ describe('nonprofitSearch', () => {
       },
       data_source: 'ProPublica Nonprofit Explorer',
     };
-    const blocks = nonprofitSearch.format!(output);
+    const blocks = nonprofitSearchOrganizations.format!(output);
     const block = blocks[0];
     const text = block?.type === 'text' ? block.text : '';
 
@@ -398,7 +404,7 @@ describe('nonprofitSearch', () => {
       },
       data_source: 'ProPublica Nonprofit Explorer',
     };
-    const blocks = nonprofitSearch.format!(output);
+    const blocks = nonprofitSearchOrganizations.format!(output);
     const block = blocks[0];
     const text = block?.type === 'text' ? block.text : '';
 
@@ -427,7 +433,7 @@ describe('nonprofitSearch', () => {
       },
       data_source: 'ProPublica Nonprofit Explorer',
     };
-    const blocks = nonprofitSearch.format!(output);
+    const blocks = nonprofitSearchOrganizations.format!(output);
     const block = blocks[0];
     const text = block?.type === 'text' ? block.text : '';
     expect(text).toContain('1 page');

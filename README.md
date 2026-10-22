@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.10-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/nonprofit-explorer-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/nonprofit-explorer-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/nonprofit-explorer-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.1.10-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/nonprofit-explorer-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/nonprofit-explorer-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/nonprofit-explorer-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -29,19 +29,19 @@
 
 ## Overview
 
-IRS Form 990 data for 1.8M+ tax-exempt organizations, via the ProPublica Nonprofit Explorer API. Search by name, fetch an org's financial snapshot, and pull its full filing history from any MCP client. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+IRS Form 990 data for 1.8M+ tax-exempt organizations, via the ProPublica Nonprofit Explorer API. Search by name, fetch an org's financial snapshot, and pull its full filing history.
 
 ### Tools
 
 | Tool | Description |
 |:---|:---|
-| `nonprofit_search` | Search 1.8M+ IRS-recognized tax-exempt organizations by name, keyword, city, or phrase with optional state, NTEE sector, and 501(c) filters |
+| `nonprofit_search_organizations` | Search 1.8M+ IRS-recognized tax-exempt organizations by name, keyword, city, or phrase with optional state, NTEE sector, and 501(c) filters |
 | `nonprofit_get_organization` | Full profile for one org by EIN: legal identity, IRS classification, ruling date, and a financial snapshot from the most recent Form 990 |
 | `nonprofit_get_filings` | All Form 990 filings for an org by EIN: year-by-year financials, revenue breakdown, executive compensation, and source PDF links |
 
 ## Capability reference
 
-### `nonprofit_search` <sub>tool</sub>
+### `nonprofit_search_organizations` <sub>tool</sub>
 
 - Full-text query — supports quoted phrases (`"Red Cross"`), required terms (`+evanston`), excluded terms (`-dental`)
 - Optional filters: US state/territory or military postal code (`ZZ` for foreign entities; a code outside that set is rejected rather than silently returning national results), NTEE major sector (1–10), 501(c) subsection code (`3` covers both public charities and private foundations — see `foundation_type` on `nonprofit_get_organization` to tell them apart)
@@ -54,11 +54,11 @@ IRS Form 990 data for 1.8M+ tax-exempt organizations, via the ProPublica Nonprof
 
 ### `nonprofit_get_organization` <sub>tool</sub>
 
-- Accepts EIN as integer (`530196605`) or string with or without hyphen (`"53-0196605"`); use `nonprofit_search` first if you only have an org name
+- Accepts EIN as integer (`530196605`) or string with or without hyphen (`"53-0196605"`); use `nonprofit_search_organizations` first if you only have an org name
 - Returns legal identity, address, NTEE code, 501(c) type, and IRS ruling date
 - IRS Business Master File standing: deductibility (including the deductible-by-treaty case), exemption status, and public-charity vs. private-foundation classification — each decoded from its IRS code with the raw code retained
 - Financial snapshot from the most recent Form 990: revenue, expenses, assets, liabilities, net assets, plus the source PDF link
-- `filing_count` shows how many filings with extracted data are on record
+- `filing_count` counts filings with extracted data; `filing_count_pdf_only` separately counts PDFs without financial extracts. Use `nonprofit_get_filings` for those links; PDF-only histories have no financial snapshot
 - Data lags 1–2 years — `tax_prd_yr` in the snapshot is the fiscal year of the filing, not the current year
 
 ---
@@ -66,6 +66,8 @@ IRS Form 990 data for 1.8M+ tax-exempt organizations, via the ProPublica Nonprof
 ### `nonprofit_get_filings` <sub>tool</sub>
 
 - All Form 990 filings with extracted data, sorted newest first — per filing: revenue, expenses, assets, liabilities, net assets, revenue breakdown (contributions, program service, investment income), and the source PDF link
+- Financial fields follow each return's form type. For 990-PF, investment income is savings interest plus dividends and securities interest (Part I column (a), lines 3–4); both components must be extracted. It excludes capital gains, rents, and net investment income
+- 990-PF filings include `grants_paid`, `distributable_amount`, `fair_market_value_assets`, and `net_investment_income`. The distributable amount is a payout requirement, not actual payments or a compliance measure
 - `program_expense_ratio` is always `null` — ProPublica returns no Form 990 Part IX program-service expense total, so the program/management/fundraising split is only in the source PDF
 - Executive compensation summary with field-name transparency and a note pointing to Schedule J for per-officer detail
 - `filings_pdf_only` lists older filings with a PDF but no extracted data

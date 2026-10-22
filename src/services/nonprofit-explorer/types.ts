@@ -44,19 +44,31 @@ export interface RawSearchResponse {
 export interface RawFiling {
   compnsatncurrofcr?: number | null;
   compofficers?: number | null;
+  contrpdpbks?: number | null;
+  distribamt?: number | null;
+  dividndsamt?: number | null;
+  fairmrktvalamt?: number | null;
   form_type?: string;
   formtype?: number; // 0=990, 1=990-EZ, 2=990-PF
+  grscontrgifts?: number | null;
+  intrstrvnue?: number | null;
   invstmntinc?: number | null;
+  netinvstinc?: number | null;
+  othrinvstinc?: number | null;
   othrsalwages?: number | null;
   pdf_url?: string | null;
+  prgmservrev?: number | null;
   profndraising?: number | null;
   tax_prd?: number;
   tax_prd_yr?: number;
+  tfundnworth?: number | null;
   totassetsend?: number | null;
   totcntrbgfts?: number | null;
+  totcntrbs?: number | null;
   totfuncexpns?: number | null;
   totliabend?: number | null;
   totnetassetend?: number | null;
+  totnetassetsend?: number | null;
   totprgmrevnue?: number | null;
   totrevenue?: number | null;
   updated?: string | null;

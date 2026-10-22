@@ -43,6 +43,7 @@ const makeFormatOutput = (overrides: Partial<OrgOutput> = {}): OrgOutput => ({
     pdf_url: 'https://example.com/990.pdf',
   },
   filing_count: 1,
+  filing_count_pdf_only: 0,
   data_source: 'ProPublica Nonprofit Explorer',
   propublica_url: 'https://projects.propublica.org/nonprofits/organizations/530196605',
   ...overrides,
