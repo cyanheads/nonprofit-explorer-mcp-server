@@ -1,6 +1,6 @@
 # nonprofit-explorer-mcp-server - Directory Structure
 
-Generated on: 2026-10-22 03:15:15
+Generated on: 2026-10-22 03:35:15
 
 ```text
 nonprofit-explorer-mcp-server/
@@ -25,6 +25,7 @@ nonprofit-explorer-mcp-server/
 │   └── settings.json
 ├── changelog/
 │   ├── 0.1.x/
+│   ├── 0.2.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
