@@ -5,6 +5,15 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline, markdownLink } from '@cyanheads/mcp-ts-core/utils';
+import {
+  compareTaxPeriods,
+  returnFormLabel,
+} from '@/services/nonprofit-explorer/filing-history.js';
+import {
+  emptyHistoryNotice,
+  filingRequirements,
+} from '@/services/nonprofit-explorer/filing-requirements.js';
 import {
   formatEin,
   getNonprofitExplorerService,
@@ -86,7 +95,7 @@ function decodeIrsCode(
 export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
   title: 'Get Nonprofit Organization',
   description:
-    'Full profile for a single tax-exempt org by EIN: legal name, address, NTEE classification, 501(c) type, IRS ruling date, and a financial snapshot from the most recent Form 990 filing (revenue, expenses, assets, net assets, and the source PDF link). Also returns the IRS Business Master File standing — whether contributions are deductible, exemption status, and public-charity vs. private-foundation classification. Use nonprofit_search_organizations first if you only have an org name — this tool requires an EIN. Data lags 1–2 years; the tax year is shown prominently. Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
+    'Full profile for a tax-exempt org by EIN: legal identity, IRS classification and BMF filing requirements, latest extracted financial snapshot, and latest return metadata across extracted and PDF-only histories. Use nonprofit_search_organizations first to resolve a name to an EIN. latest_filing is the latest extracted snapshot; latest_return may be newer. Data lags 1–2 years; always cite the fiscal year. Data from ProPublica Nonprofit Explorer and IRS Form 990 filings.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
@@ -176,6 +185,52 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       .describe(
         'Tax period of the latest return recorded in the IRS Business Master File (e.g. "2025-06-01"). Often more recent than latest_filing.tax_prd_yr, which reflects the newest 990 ProPublica has extracted. Null when not on record.',
       ),
+    filing_requirement: z
+      .string()
+      .nullable()
+      .describe(
+        'IRS BMF filing requirement as <raw code> — <meaning>. Null when not on record; unknown codes retained.',
+      ),
+    pf_filing_requirement: z
+      .string()
+      .nullable()
+      .describe(
+        'IRS BMF private-foundation filing requirement as <raw code> — <meaning>. Null when not on record.',
+      ),
+    affiliation: z
+      .string()
+      .nullable()
+      .describe(
+        'IRS BMF affiliation as <raw code> — <meaning>. Group affiliation alone does not prove inclusion in a group return. Null when not on record.',
+      ),
+    group_exemption_number: z
+      .number()
+      .nullable()
+      .describe(
+        'IRS BMF group exemption number. Zero means none assigned; null means not on record. Does not prove inclusion in a group return.',
+      ),
+    latest_return: z
+      .object({
+        tax_prd_yr: z
+          .number()
+          .nullable()
+          .describe('Fiscal year of the newest recorded return. Null when absent.'),
+        tax_prd: z
+          .number()
+          .nullable()
+          .describe('Full YYYYMM tax period of the newest recorded return. Null when absent.'),
+        form_type: z
+          .string()
+          .nullable()
+          .describe(
+            'Normalized known IRS form label, or unchanged unknown label. Null when absent.',
+          ),
+        pdf_url: z.string().nullable().describe('Source return PDF link. Null when absent.'),
+      })
+      .nullable()
+      .describe(
+        'Newest return across extracted and PDF-only histories, ordered by full tax period. Null when no history exists; equal-period entries imply no amendment precedence.',
+      ),
     latest_filing: z
       .object({
         tax_prd_yr: z
@@ -215,7 +270,7 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       })
       .nullable()
       .describe(
-        'Financial snapshot from the most recent Form 990. Null if no filings_with_data are available.',
+        'Latest extracted financial snapshot, which can predate PDF-only returns. Null if no filings_with_data are available.',
       ),
     filing_count: z.number().describe('Total filings with extracted data on record.'),
     filing_count_pdf_only: z
@@ -226,6 +281,20 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     data_source: z.string().describe('ProPublica + IRS attribution text.'),
     propublica_url: z.string().describe('ProPublica Nonprofit Explorer URL for this org.'),
   }),
+
+  enrichment: {
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Present only when both filing histories are empty. Describes dataset absence and BMF context without inferring its cause.',
+      ),
+  },
+  enrichmentTrailer: {
+    notice: {
+      render: (notice) => (notice === undefined ? '' : `> ${escapeMarkdownInline(notice)}`),
+    },
+  },
 
   errors: [
     {
@@ -275,9 +344,11 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     const org = raw.organization!;
     const filings = raw.filings_with_data ?? [];
 
-    // Pick the latest filing (most recent tax_prd_yr)
-    const sorted = [...filings].sort((a, b) => (b.tax_prd_yr ?? 0) - (a.tax_prd_yr ?? 0));
-    const latest = sorted[0] ?? null;
+    const pdfOnly = raw.filings_without_data ?? [];
+    const latest = filings.toSorted(compareTaxPeriods)[0] ?? null;
+    const newestReturn = [...filings, ...pdfOnly].sort(compareTaxPeriods)[0];
+    if (filings.length === 0 && pdfOnly.length === 0)
+      ctx.enrich.notice(emptyHistoryNotice(org, ein));
 
     const latestFiling = latest
       ? {
@@ -319,9 +390,18 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       exempt_status: decodeIrsCode(org.exempt_organization_status_code, EXEMPT_STATUS_LABELS),
       foundation_type: decodeIrsCode(org.foundation_code, FOUNDATION_LABELS),
       bmf_tax_period: org.tax_period ?? null,
+      ...filingRequirements(org),
+      latest_return: newestReturn
+        ? {
+            tax_prd_yr: newestReturn.tax_prd_yr ?? null,
+            tax_prd: newestReturn.tax_prd ?? null,
+            form_type: returnFormLabel(newestReturn),
+            pdf_url: newestReturn.pdf_url ?? null,
+          }
+        : null,
       latest_filing: latestFiling,
       filing_count: filings.length,
-      filing_count_pdf_only: raw.filings_without_data?.length ?? 0,
+      filing_count_pdf_only: pdfOnly.length,
       data_source: raw.data_source ?? 'ProPublica Nonprofit Explorer, IRS Form 990 data.',
       propublica_url: `https://projects.propublica.org/nonprofits/organizations/${einNum}`,
     };
@@ -336,44 +416,79 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
      * recorded from a field the response never carried, and collapsing the labels would
      * lose the distinction between unrecorded, unclassified, and unextracted.
      */
-    lines.push(`# ${result.name}`);
+    lines.push(`# ${escapeMarkdownInline(result.name)}`);
     lines.push('');
 
-    lines.push(`**EIN:** ${result.strein} (${result.ein})`);
-    lines.push(`**BMF Secondary Name Line:** ${result.sort_name ?? NOT_ON_RECORD}`);
+    lines.push(`**EIN:** ${escapeMarkdownInline(result.strein)} (${result.ein})`);
+    lines.push(
+      `**BMF Secondary Name Line:** ${escapeMarkdownInline(result.sort_name ?? NOT_ON_RECORD)}`,
+    );
     lines.push(
       `**Type:** ${result.subsection_code != null ? `501(c)(${result.subsection_code})` : NOT_CLASSIFIED}`,
     );
-    lines.push(`**NTEE Code:** ${result.ntee_code ?? NOT_CLASSIFIED}`);
-    lines.push(`**IRS Recognition:** ${result.ruling_date ?? NOT_ON_RECORD}`);
-    lines.push(`**Contributions Deductible:** ${result.deductible ?? NOT_ON_RECORD}`);
-    lines.push(`**IRS Exemption Status:** ${result.exempt_status ?? NOT_ON_RECORD}`);
-    lines.push(`**Foundation Classification:** ${result.foundation_type ?? NOT_ON_RECORD}`);
-    lines.push(`**BMF Tax Period:** ${result.bmf_tax_period ?? NOT_ON_RECORD}`);
+    lines.push(`**NTEE Code:** ${escapeMarkdownInline(result.ntee_code ?? NOT_CLASSIFIED)}`);
+    lines.push(`**IRS Recognition:** ${escapeMarkdownInline(result.ruling_date ?? NOT_ON_RECORD)}`);
+    lines.push(
+      `**Contributions Deductible:** ${escapeMarkdownInline(result.deductible ?? NOT_ON_RECORD)}`,
+    );
+    lines.push(
+      `**IRS Exemption Status:** ${escapeMarkdownInline(result.exempt_status ?? NOT_ON_RECORD)}`,
+    );
+    lines.push(
+      `**Foundation Classification:** ${escapeMarkdownInline(result.foundation_type ?? NOT_ON_RECORD)}`,
+    );
+    lines.push(
+      `**BMF Tax Period:** ${escapeMarkdownInline(result.bmf_tax_period ?? NOT_ON_RECORD)}`,
+    );
+    lines.push(
+      `**Filing Requirement:** ${escapeMarkdownInline(result.filing_requirement ?? NOT_ON_RECORD)}`,
+    );
+    lines.push(
+      `**PF Filing Requirement:** ${escapeMarkdownInline(result.pf_filing_requirement ?? NOT_ON_RECORD)}`,
+    );
+    lines.push(`**Affiliation:** ${escapeMarkdownInline(result.affiliation ?? NOT_ON_RECORD)}`);
+    lines.push(
+      `**Group Exemption Number:** ${result.group_exemption_number === 0 ? '0 (none assigned)' : (result.group_exemption_number ?? NOT_ON_RECORD)}`,
+    );
     lines.push('');
 
-    lines.push(`**Address:** ${result.address ?? NOT_ON_RECORD}`);
+    lines.push(`**Address:** ${escapeMarkdownInline(result.address ?? NOT_ON_RECORD)}`);
     lines.push(
-      `**City:** ${result.city ?? NOT_ON_RECORD} | **State:** ${result.state ?? NOT_ON_RECORD} | ` +
-        `**ZIP:** ${result.zipcode ?? NOT_ON_RECORD}`,
+      `**City:** ${escapeMarkdownInline(result.city ?? NOT_ON_RECORD)} | **State:** ${escapeMarkdownInline(result.state ?? NOT_ON_RECORD)} | ` +
+        `**ZIP:** ${escapeMarkdownInline(result.zipcode ?? NOT_ON_RECORD)}`,
     );
 
     lines.push(`**Filings with extracted data:** ${result.filing_count}`);
     lines.push(`**PDF-only filings:** ${result.filing_count_pdf_only}`);
     lines.push('');
-    lines.push(`**Profile:** ${result.propublica_url}`);
+    lines.push(`**Profile:** ${markdownLink(result.propublica_url, result.propublica_url)}`);
 
+    if (result.latest_return) {
+      const r = result.latest_return;
+      lines.push('');
+      lines.push('## Latest Recorded Return');
+      lines.push(
+        `**Fiscal Year:** ${r.tax_prd_yr ?? 'Not provided'} | **Tax Period:** ${r.tax_prd ?? 'Not provided'} | **Form:** ${escapeMarkdownInline(r.form_type ?? 'Not provided')}`,
+      );
+      lines.push(
+        `**Return PDF:** ${r.pdf_url ? markdownLink(r.pdf_url, r.pdf_url) : 'Not available'}`,
+      );
+    } else {
+      lines.push('**Latest Recorded Return:** No filing history on record');
+    }
     if (result.latest_filing) {
       const f = result.latest_filing;
       lines.push('');
-      lines.push(`## Latest Filing (${f.form_type}, FY ${f.tax_prd_yr})`);
+      lines.push(`## Latest Extracted Financial Snapshot (${f.form_type}, FY ${f.tax_prd_yr})`);
       lines.push('> ⚠️ Data lags 1–2 years. FY shown is the fiscal year, not the current year.');
       lines.push(`**Revenue:** ${money(f.total_revenue)}`);
       lines.push(`**Expenses:** ${money(f.total_expenses)}`);
       lines.push(`**Assets:** ${money(f.total_assets)}`);
       lines.push(`**Liabilities:** ${money(f.total_liabilities)}`);
       lines.push(`**Net Assets:** ${money(f.net_assets)}`);
-      lines.push(`**Source 990 PDF:** ${f.pdf_url ?? 'Not yet available for this period'}`);
+      lines.push(
+        `**Source 990 PDF:** ${f.pdf_url ? markdownLink(f.pdf_url, f.pdf_url) : 'Not yet available for this period'}`,
+      );
     } else if (result.filing_count_pdf_only > 0) {
       lines.push('');
       lines.push(
@@ -381,7 +496,7 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       );
     } else {
       lines.push('');
-      lines.push('*No Form 990 data on file. Org may file Form 990N (under $50K revenue).*');
+      lines.push('*No extracted financial snapshot or PDF-only filing on record.*');
     }
 
     lines.push('');
@@ -391,7 +506,7 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     lines.push(`**Total Revenue (BMF):** ${money(result.revenue_amount, NOT_ON_RECORD)}`);
 
     lines.push('');
-    lines.push(`*${result.data_source}*`);
+    lines.push(`*${escapeMarkdownInline(result.data_source)}*`);
 
     return [{ type: 'text', text: lines.join('\n') }];
   },

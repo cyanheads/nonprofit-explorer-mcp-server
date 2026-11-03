@@ -247,14 +247,84 @@ const US_POSTAL_CODES: ReadonlySet<string> = new Set(
 );
 
 /**
- * Uppercase a state input and confirm ProPublica can honor it as a filter.
+ * Normalize a postal code or full state/territory name to a supported postal code.
  * Returns null for anything outside the recognized postal codes — the API answers those
  * with HTTP 200 and the unfiltered national result set rather than an error.
  */
 export function normalizeStateCode(state: string): string | null {
   const code = state.trim().toUpperCase();
-  return US_POSTAL_CODES.has(code) ? code : null;
+  return US_POSTAL_CODES.has(code) ? code : (STATE_NAMES.get(code) ?? null);
 }
+
+/** Full names accepted alongside the upstream postal codes. */
+const STATE_NAMES: ReadonlyMap<string, string> = new Map(
+  (
+    [
+      ['Alabama', 'AL'],
+      ['Alaska', 'AK'],
+      ['Arizona', 'AZ'],
+      ['Arkansas', 'AR'],
+      ['California', 'CA'],
+      ['Colorado', 'CO'],
+      ['Connecticut', 'CT'],
+      ['Delaware', 'DE'],
+      ['Florida', 'FL'],
+      ['Georgia', 'GA'],
+      ['Hawaii', 'HI'],
+      ['Idaho', 'ID'],
+      ['Illinois', 'IL'],
+      ['Indiana', 'IN'],
+      ['Iowa', 'IA'],
+      ['Kansas', 'KS'],
+      ['Kentucky', 'KY'],
+      ['Louisiana', 'LA'],
+      ['Maine', 'ME'],
+      ['Maryland', 'MD'],
+      ['Massachusetts', 'MA'],
+      ['Michigan', 'MI'],
+      ['Minnesota', 'MN'],
+      ['Mississippi', 'MS'],
+      ['Missouri', 'MO'],
+      ['Montana', 'MT'],
+      ['Nebraska', 'NE'],
+      ['Nevada', 'NV'],
+      ['New Hampshire', 'NH'],
+      ['New Jersey', 'NJ'],
+      ['New Mexico', 'NM'],
+      ['New York', 'NY'],
+      ['North Carolina', 'NC'],
+      ['North Dakota', 'ND'],
+      ['Ohio', 'OH'],
+      ['Oklahoma', 'OK'],
+      ['Oregon', 'OR'],
+      ['Pennsylvania', 'PA'],
+      ['Rhode Island', 'RI'],
+      ['South Carolina', 'SC'],
+      ['South Dakota', 'SD'],
+      ['Tennessee', 'TN'],
+      ['Texas', 'TX'],
+      ['Utah', 'UT'],
+      ['Vermont', 'VT'],
+      ['Virginia', 'VA'],
+      ['Washington', 'WA'],
+      ['West Virginia', 'WV'],
+      ['Wisconsin', 'WI'],
+      ['Wyoming', 'WY'],
+      ['District of Columbia', 'DC'],
+      ['American Samoa', 'AS'],
+      ['Guam', 'GU'],
+      ['Northern Mariana Islands', 'MP'],
+      ['Puerto Rico', 'PR'],
+      ['U.S. Virgin Islands', 'VI'],
+      ['Virgin Islands', 'VI'],
+      ['United States Virgin Islands', 'VI'],
+      ['Federated States of Micronesia', 'FM'],
+      ['Micronesia', 'FM'],
+      ['Marshall Islands', 'MH'],
+      ['Palau', 'PW'],
+    ] satisfies [string, string][]
+  ).map(([name, code]) => [name.toUpperCase(), code]),
+);
 
 /** Normalize an EIN input (number or string with/without hyphen) to an integer. */
 export function normalizeEin(ein: number | string): number {

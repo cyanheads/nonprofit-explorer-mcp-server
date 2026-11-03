@@ -113,6 +113,27 @@ describe('tool wire contract', () => {
     expect(result.structuredContent).not.toHaveProperty('error');
   });
 
+  it('rejects reversed fiscal-year bounds with recovery on both surfaces before fetching', async () => {
+    const result = await runToolContract(nonprofitGetFilings, {
+      ein: 530196605,
+      from_year: 2025,
+      to_year: 2023,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(errorEnvelope(result)).toMatchObject({
+      code: JsonRpcErrorCode.InvalidParams,
+      data: {
+        reason: 'invalid_year_range',
+        recovery: { hint: expect.stringContaining('from_year less than or equal to to_year') },
+      },
+    });
+    expect(renderText(result)).toContain('invalid_year_range');
+    expect(renderText(result)).toContain('from_year less than or equal to to_year');
+    expect(svcModule.getNonprofitExplorerService().getOrganization).not.toHaveBeenCalled();
+    expect(result.structuredContent).not.toHaveProperty('filings');
+  });
+
   it('puts a declared failure on the error branch alone, carrying reason and recovery', async () => {
     // Compared against the contract rather than a literal, so a reword cannot drift.
     const declared = nonprofitSearchOrganizations.errors?.find(

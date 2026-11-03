@@ -5,6 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import {
   getNonprofitExplorerService,
   normalizeStateCode,
@@ -22,6 +23,9 @@ const NOT_ON_RECORD = 'Not on record';
 /** No IRS classification code on record for this organization. */
 const NOT_CLASSIFIED = 'Not classified';
 
+/** NTEE major letters grouped by ProPublica's numbered search sectors. */
+const NTEE_GROUPS = ['A', 'B', 'CD', 'EFGH', 'IJKLMNOP', 'Q', 'RSTUVW', 'X', 'Y', 'Z'];
+
 export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations', {
   title: 'Search Nonprofits',
   description:
@@ -36,16 +40,27 @@ export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations
       ),
     state: z
       .string()
-      .length(2)
       .optional()
       .describe(
-        'Two-letter US state, territory, or military postal code (e.g., "WA", "NY", "PR"). Case-insensitive — normalized to uppercase before filtering. A code outside that set is rejected rather than silently returning national results. Restricts results to orgs headquartered in that state. "ZZ" (foreign address) is accepted, but no organization in the index currently carries it.',
+        'US state or territory name (e.g., "Washington", "Puerto Rico") or two-letter state, territory, or military postal code. Trimmed and case-insensitive; normalized to a postal code before filtering. Unrecognized values are rejected. Restricts results to headquarters in that state. "ZZ" accepts foreign addresses, though no organization in the index currently carries it.',
       ),
     ntee_category: z
-      .enum(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'])
+      .enum([
+        '1',
+        '2',
+        '3',
+        '4',
+        '5',
+        '6',
+        '7',
+        '8',
+        '9',
+        '10',
+        ...NTEE_GROUPS.flatMap((letters) => [...letters, ...letters.toLowerCase()]),
+      ])
       .optional()
       .describe(
-        'NTEE (National Taxonomy of Exempt Entities) major group integer (1–10). 1=Arts/Culture/Humanities, 2=Education, 3=Environment/Animals, 4=Health, 5=Human Services, 6=International/Foreign Affairs, 7=Public/Societal Benefit, 8=Religion Related, 9=Mutual/Membership Benefit, 10=Unknown/Unclassified.',
+        'NTEE major group digit string (1–10) or case-insensitive major letter: A→1 Arts/Culture/Humanities, B→2 Education, C–D→3 Environment/Animals, E–H→4 Health, I–P→5 Human Services, Q→6 International/Foreign Affairs, R–W→7 Public/Societal Benefit, X→8 Religion Related, Y→9 Mutual/Membership Benefit, Z→10 Unknown/Unclassified. Requests and active_filters use the numbered group.',
       ),
     subsection_code: z
       .enum([
@@ -123,7 +138,7 @@ export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations
               .string()
               .nullable()
               .describe(
-                'The legal name with the IRS Business Master File secondary name line appended — a division, service-center, or chapter identifier, not a separate trade name the org operates under. Null when the org has no secondary name line.',
+                'Upstream legal name with an optional IRS Business Master File secondary name line appended — a division, service-center, or chapter identifier. Can repeat name; null when upstream omits this value.',
               ),
             city: z.string().nullable().describe('Headquarters city. Null when not on record.'),
             state: z
@@ -170,6 +185,12 @@ export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations
       ),
   },
 
+  enrichmentTrailer: {
+    notice: {
+      render: (notice) => (notice === undefined ? '' : `> ${escapeMarkdownInline(notice)}`),
+    },
+  },
+
   errors: [
     {
       reason: 'timeout',
@@ -190,9 +211,9 @@ export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations
     {
       reason: 'invalid_state',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'The state filter is not a US state, territory, or military postal code (or ZZ for foreign entities)',
+      when: 'The state filter is not a recognized state or territory name, postal code, military postal code, or ZZ for foreign entities',
       recovery:
-        'Pass a two-letter USPS code such as WA, NY, or PR; use ZZ for foreign-address organizations, or omit state to search nationally.',
+        'Pass a state or territory name such as Washington or Puerto Rico, or a postal code such as WA, NY, or PR; use ZZ for foreign-address organizations, or omit state to search nationally.',
     },
     {
       reason: 'pagination_ceiling',
@@ -226,23 +247,27 @@ export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations
       if (normalized === null) {
         throw ctx.fail(
           'invalid_state',
-          `"${input.state}" is not a US state, territory, or military postal code. ` +
-            'ProPublica ignores an unrecognized state filter and returns unfiltered national results.',
+          `"${input.state}" is not a recognized state or territory name or postal code. ProPublica ignores an unrecognized state filter and returns unfiltered national results.`,
         );
       }
       state = normalized;
     }
 
+    const category = input.ntee_category?.toUpperCase();
+    const letterGroup =
+      category === undefined ? -1 : NTEE_GROUPS.findIndex((letters) => letters.includes(category));
+    const ntee_category = letterGroup === -1 ? input.ntee_category : String(letterGroup + 1);
+
     ctx.log.info('Searching nonprofits', {
       query: input.query,
       state,
-      ntee_category: input.ntee_category,
+      ntee_category,
       subsection_code: input.subsection_code,
       page: input.page,
     });
 
     const svc = getNonprofitExplorerService();
-    const raw = await svc.search({ ...input, state }, ctx);
+    const raw = await svc.search({ ...input, state, ntee_category }, ctx);
 
     const orgs = raw.organizations ?? [];
     const total = raw.total_results ?? 0;
@@ -304,7 +329,7 @@ export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations
       active_filters: {
         query: input.query,
         state: state ?? null,
-        ntee_category: input.ntee_category ?? null,
+        ntee_category: ntee_category ?? null,
         subsection_code: input.subsection_code ?? null,
       },
       data_source: raw.data_source ?? 'ProPublica Nonprofit Explorer, IRS Form 990 data.',
@@ -337,30 +362,34 @@ export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations
      * response never carried — and the labels stay distinct per field, since "not applied"
      * and "not on record" are different facts.
      */
-    lines.push(`**Query:** ${result.active_filters.query}`);
+    lines.push(`**Query:** ${escapeMarkdownInline(result.active_filters.query)}`);
     lines.push(
-      `**Filters:** state=${result.active_filters.state ?? NOT_APPLIED}, ` +
-        `ntee=${result.active_filters.ntee_category ?? NOT_APPLIED}, ` +
-        `501(c)=${result.active_filters.subsection_code ?? NOT_APPLIED}`,
+      `**Filters:** state=${escapeMarkdownInline(result.active_filters.state ?? NOT_APPLIED)}, ` +
+        `ntee=${escapeMarkdownInline(result.active_filters.ntee_category ?? NOT_APPLIED)}, ` +
+        `501(c)=${escapeMarkdownInline(result.active_filters.subsection_code ?? NOT_APPLIED)}`,
     );
 
     lines.push('');
 
     for (const org of result.organizations) {
-      lines.push(`## ${org.name}`);
-      lines.push(`**EIN (int):** ${org.ein} | **EIN:** ${org.strein} | **Score:** ${org.score}`);
+      lines.push(`## ${escapeMarkdownInline(org.name)}`);
       lines.push(
-        `**City:** ${org.city ?? NOT_ON_RECORD} | **State:** ${org.state ?? NOT_ON_RECORD}`,
+        `**EIN (int):** ${org.ein} | **EIN:** ${escapeMarkdownInline(org.strein)} | **Score:** ${org.score}`,
       );
-      lines.push(`**NTEE Code:** ${org.ntee_code ?? NOT_CLASSIFIED}`);
+      lines.push(
+        `**City:** ${escapeMarkdownInline(org.city ?? NOT_ON_RECORD)} | **State:** ${escapeMarkdownInline(org.state ?? NOT_ON_RECORD)}`,
+      );
+      lines.push(`**NTEE Code:** ${escapeMarkdownInline(org.ntee_code ?? NOT_CLASSIFIED)}`);
       lines.push(
         `**501(c):** ${org.subseccd != null ? `501(c)(${org.subseccd})` : NOT_CLASSIFIED}`,
       );
-      lines.push(`**Name with Secondary Line:** ${org.sub_name ?? NOT_ON_RECORD}`);
+      lines.push(
+        `**Name with Secondary Line:** ${escapeMarkdownInline(org.sub_name ?? NOT_ON_RECORD)}`,
+      );
       lines.push('');
     }
 
-    lines.push(`*${result.data_source}*`);
+    lines.push(`*${escapeMarkdownInline(result.data_source)}*`);
 
     return [{ type: 'text', text: lines.join('\n') }];
   },

@@ -45,17 +45,23 @@ export interface RawFiling {
   compnsatncurrofcr?: number | null;
   compofficers?: number | null;
   contrpdpbks?: number | null;
+  direxpns?: number | null;
   distribamt?: number | null;
   dividndsamt?: number | null;
   fairmrktvalamt?: number | null;
   form_type?: string;
   formtype?: number; // 0=990, 1=990-EZ, 2=990-PF
   grscontrgifts?: number | null;
+  grsincfndrsng?: number | null;
+  grsrevnuefndrsng?: number | null;
   intrstrvnue?: number | null;
   invstmntinc?: number | null;
+  lessdirfndrsng?: number | null;
+  netincfndrsng?: number | null;
   netinvstinc?: number | null;
   othrinvstinc?: number | null;
   othrsalwages?: number | null;
+  payrolltx?: number | null;
   pdf_url?: string | null;
   prgmservrev?: number | null;
   profndraising?: number | null;
@@ -93,6 +99,7 @@ export interface RawPdfOnlyFiling {
  */
 export interface RawOrganization {
   address?: string | null;
+  affiliation_code?: number | null;
   asset_amount?: number | null;
   city?: string | null;
   data_source?: string;
@@ -101,6 +108,8 @@ export interface RawOrganization {
   ein?: number;
   /** IRS BMF exemption status: 1 = unconditional, 2 = conditional, 12 and 25 are trusts/terminations. */
   exempt_organization_status_code?: number | null;
+  exemption_number?: number | null;
+  filing_requirement_code?: number | null;
   filings_with_data?: RawFiling[];
   filings_without_data?: RawPdfOnlyFiling[];
   /** IRS BMF foundation classification: 2–4 are private foundations, 10–25 are public charities. */
@@ -109,6 +118,7 @@ export interface RawOrganization {
   income_amount?: number | null;
   name?: string;
   ntee_code?: string | null;
+  pf_filing_requirement_code?: number | null;
   revenue_amount?: number | null;
   ruling_date?: string | null;
   /** IRS BMF secondary name line (SORT_NAME) — an internal sort key, not an alternate org name. */

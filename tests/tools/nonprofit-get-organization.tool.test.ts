@@ -4,7 +4,7 @@
  */
 
 import { JsonRpcErrorCode, notFound, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nonprofitGetOrganization } from '@/mcp-server/tools/definitions/nonprofit-get-organization.tool.js';
 import * as svcModule from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
@@ -32,6 +32,11 @@ const makeFormatOutput = (overrides: Partial<OrgOutput> = {}): OrgOutput => ({
   exempt_status: '1 — Unconditional Exemption',
   foundation_type: '15 — Publicly supported organization 170(b)(1)(A)(vi)',
   bmf_tax_period: '2025-06-01',
+  filing_requirement: null,
+  pf_filing_requirement: null,
+  affiliation: null,
+  group_exemption_number: null,
+  latest_return: null,
   latest_filing: {
     tax_prd_yr: 2022,
     form_type: '990',
@@ -92,6 +97,121 @@ const makeRawOrgResponse = (overrides: object = {}) => ({
 });
 
 describe('nonprofitGetOrganization', () => {
+  it('selects the latest full-period snapshot and newest return across both histories', async () => {
+    vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+      getOrganization: vi.fn().mockResolvedValue({
+        organization: { ein: 530196605 },
+        filings_with_data: [
+          { tax_prd_yr: 2023, tax_prd: 202303, totrevenue: 1 },
+          { tax_prd_yr: 2023, tax_prd: 202312, totrevenue: 2 },
+        ],
+        filings_without_data: [
+          {
+            tax_prd_yr: 2024,
+            tax_prd: 202412,
+            formtype_str: '990EZ',
+            pdf_url: 'https://example.com/new.pdf',
+          },
+        ],
+      }),
+    } as unknown as svcModule.NonprofitExplorerService);
+    const result = await nonprofitGetOrganization.handler(
+      { ein: 530196605 },
+      createMockContext({ errors: nonprofitGetOrganization.errors }),
+    );
+    expect(result.latest_filing?.total_revenue).toBe(2);
+    expect(result.latest_return).toEqual({
+      tax_prd_yr: 2024,
+      tax_prd: 202412,
+      form_type: '990-EZ',
+      pdf_url: 'https://example.com/new.pdf',
+    });
+    const text = renderText(nonprofitGetOrganization.format!(result));
+    expect(text).toContain('Latest Extracted Financial Snapshot');
+    expect(text).toContain('202412');
+    expect(text).toContain('https://example.com/new.pdf');
+  });
+
+  it('emits church BMF requirements and empty-history context on both surfaces', async () => {
+    vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+      getOrganization: vi.fn().mockResolvedValue({
+        organization: {
+          ein: 910597007,
+          name: 'Holy Family',
+          filing_requirement_code: 6,
+          pf_filing_requirement_code: 0,
+          affiliation_code: 9,
+          exemption_number: 928,
+        },
+        filings_with_data: [],
+        filings_without_data: [],
+      }),
+    } as unknown as svcModule.NonprofitExplorerService);
+    const result = await runToolContract(nonprofitGetOrganization, { ein: 910597007 });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      filing_requirement: '6 — Not required to file (church)',
+      pf_filing_requirement: '0 — No 990-PF return',
+      affiliation: '9 — Subordinate in a group ruling',
+      group_exemption_number: 928,
+      latest_return: null,
+    });
+    expect(JSON.stringify(result.structuredContent)).toContain('no Form 990');
+    expect(JSON.stringify(result.content)).toContain('church');
+    expect(JSON.stringify(result)).not.toMatch(/990-?N/);
+  });
+
+  it.each([
+    [{}, { tax_prd_yr: null, tax_prd: null, form_type: null, pdf_url: null }],
+    [
+      { tax_prd_yr: 2025, tax_prd: 202512, formtype_str: '990O' },
+      { tax_prd_yr: 2025, tax_prd: 202512, form_type: '990O', pdf_url: null },
+    ],
+    [
+      { tax_prd_yr: 2024, tax_prd: 202406, formtype: 2 },
+      { tax_prd_yr: 2024, tax_prd: 202406, form_type: '990-PF', pdf_url: null },
+    ],
+  ])('preserves sparse and unknown PDF-only return metadata %j', async (pdf, expected) => {
+    vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+      getOrganization: vi.fn().mockResolvedValue({
+        organization: { ein: 530196605 },
+        filings_with_data: [],
+        filings_without_data: [pdf],
+      }),
+    } as unknown as svcModule.NonprofitExplorerService);
+    const result = await runToolContract(nonprofitGetOrganization, { ein: 530196605 });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      latest_filing: null,
+      latest_return: expected,
+      filing_count: 0,
+      filing_count_pdf_only: 1,
+    });
+    const text = JSON.stringify(result.content);
+    expect(text).toContain('no extracted financial snapshot');
+    expect(text).toContain(expected.form_type ?? 'Not provided');
+    expect(text).not.toContain('no Form 990 for it');
+  });
+
+  it('renders unrecorded BMF fields and zero group number distinctly', async () => {
+    vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+      getOrganization: vi.fn().mockResolvedValue(makeRawOrgResponse({ exemption_number: 0 })),
+    } as unknown as svcModule.NonprofitExplorerService);
+    const result = await nonprofitGetOrganization.handler(
+      { ein: 530196605 },
+      createMockContext({ errors: nonprofitGetOrganization.errors }),
+    );
+    expect(result.group_exemption_number).toBe(0);
+    expect(result.filing_requirement).toBeNull();
+    const text = renderText(nonprofitGetOrganization.format!(result));
+    expect(text).toContain('**Group Exemption Number:** 0 (none assigned)');
+    expect(text).toContain('**Filing Requirement:** Not on record');
+    expect(result.latest_return).toMatchObject({
+      tax_prd_yr: 2022,
+      tax_prd: null,
+      form_type: '990',
+    });
+  });
   beforeEach(() => {
     vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
       search: vi.fn(),

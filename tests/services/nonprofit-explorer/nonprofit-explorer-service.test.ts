@@ -459,7 +459,7 @@ describe('form-specific financial wire data', () => {
       expect(text).toContain(
         formtype === 2
           ? '**Grants Paid (Part I line 25 column (a)):** $0'
-          : '**Grants Paid (Part I line 25 column (a)):** Not applicable',
+          : '**Grants Paid; Distributable Amount; Fair-Market-Value Assets; Net Investment Income:** Not applicable',
       );
     },
   );
@@ -617,6 +617,144 @@ describe('form-specific financial wire data', () => {
 });
 
 describe('NonprofitExplorerService.search — state filter', () => {
+  it.each([
+    ['A', '1'],
+    ['B', '2'],
+    ['C', '3'],
+    ['D', '3'],
+    ['E', '4'],
+    ['F', '4'],
+    ['G', '4'],
+    ['H', '4'],
+    ['I', '5'],
+    ['J', '5'],
+    ['K', '5'],
+    ['L', '5'],
+    ['M', '5'],
+    ['N', '5'],
+    ['O', '5'],
+    ['P', '5'],
+    ['Q', '6'],
+    ['R', '7'],
+    ['S', '7'],
+    ['T', '7'],
+    ['U', '7'],
+    ['V', '7'],
+    ['W', '7'],
+    ['X', '8'],
+    ['Y', '9'],
+    ['Z', '10'],
+    ...Array.from({ length: 10 }, (_, i) => [String(i + 1), String(i + 1)]),
+  ])('sends and echoes NTEE %s as canonical group %s', async (alias, group) => {
+    http.route({ match: SEARCH_URL, respond: () => Response.json(populatedPage) });
+    for (const ntee_category of [alias, alias!.toLowerCase()]) {
+      const result = await runToolContract(nonprofitSearchOrganizations, {
+        query: '',
+        ntee_category,
+      });
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({ active_filters: { ntee_category: group } });
+      expect(JSON.stringify(result.content)).toContain(`ntee=${group}`);
+    }
+    expect(
+      http.calls.map((call) => new URL(call.request.url).searchParams.get('ntee[id]')),
+    ).toEqual([group, group]);
+  });
+
+  it.each([
+    ['Alabama', 'AL'],
+    ['Alaska', 'AK'],
+    ['Arizona', 'AZ'],
+    ['Arkansas', 'AR'],
+    ['California', 'CA'],
+    ['Colorado', 'CO'],
+    ['Connecticut', 'CT'],
+    ['Delaware', 'DE'],
+    ['Florida', 'FL'],
+    ['Georgia', 'GA'],
+    ['Hawaii', 'HI'],
+    ['Idaho', 'ID'],
+    ['Illinois', 'IL'],
+    ['Indiana', 'IN'],
+    ['Iowa', 'IA'],
+    ['Kansas', 'KS'],
+    ['Kentucky', 'KY'],
+    ['Louisiana', 'LA'],
+    ['Maine', 'ME'],
+    ['Maryland', 'MD'],
+    ['Massachusetts', 'MA'],
+    ['Michigan', 'MI'],
+    ['Minnesota', 'MN'],
+    ['Mississippi', 'MS'],
+    ['Missouri', 'MO'],
+    ['Montana', 'MT'],
+    ['Nebraska', 'NE'],
+    ['Nevada', 'NV'],
+    ['New Hampshire', 'NH'],
+    ['New Jersey', 'NJ'],
+    ['New Mexico', 'NM'],
+    ['North Carolina', 'NC'],
+    ['North Dakota', 'ND'],
+    ['Ohio', 'OH'],
+    ['Oklahoma', 'OK'],
+    ['Oregon', 'OR'],
+    ['Pennsylvania', 'PA'],
+    ['Rhode Island', 'RI'],
+    ['South Carolina', 'SC'],
+    ['South Dakota', 'SD'],
+    ['Tennessee', 'TN'],
+    ['Texas', 'TX'],
+    ['Utah', 'UT'],
+    ['Vermont', 'VT'],
+    ['Virginia', 'VA'],
+    ['West Virginia', 'WV'],
+    ['Wisconsin', 'WI'],
+    ['Wyoming', 'WY'],
+    [' Washington ', 'WA'],
+    ['new york', 'NY'],
+    ['DISTRICT OF COLUMBIA', 'DC'],
+    ['Puerto Rico', 'PR'],
+    ['Guam', 'GU'],
+    ['American Samoa', 'AS'],
+    ['Northern Mariana Islands', 'MP'],
+    ['U.S. Virgin Islands', 'VI'],
+    ['Federated States of Micronesia', 'FM'],
+    ['Marshall Islands', 'MH'],
+    ['Palau', 'PW'],
+  ])('sends and echoes state name %s as %s', async (state, code) => {
+    http.route({ match: SEARCH_URL, respond: () => Response.json(populatedPage) });
+    const result = await runToolContract(nonprofitSearchOrganizations, { query: '', state });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({ active_filters: { state: code } });
+    expect(JSON.stringify(result.content)).toContain(`state=${code}`);
+    expect(new URL(http.calls[0]!.request.url).searchParams.get('state[id]')).toBe(code);
+  });
+
+  it.each(['Atlantis', '', 'Washington DC', 'constructor'])(
+    'rejects unknown state %s with recovery before fetching',
+    async (state) => {
+      const result = await runToolContract(nonprofitSearchOrganizations, { query: '', state });
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          data: { reason: 'invalid_state', recovery: { hint: expect.stringContaining('WA') } },
+        },
+      });
+      expect(JSON.stringify(result.content)).toContain('Recovery:');
+      expect(http.calls).toHaveLength(0);
+    },
+  );
+
+  it.each(['0', '11', 'AA', 'P210', 'constructor'])(
+    'rejects invalid NTEE %s before fetching',
+    async (ntee_category) => {
+      const result = await runToolContract(nonprofitSearchOrganizations, {
+        query: '',
+        ntee_category,
+      });
+      expect(result.isError).toBe(true);
+      expect(http.calls).toHaveLength(0);
+    },
+  );
   /**
    * ProPublica honors `state[id]` only on an exact uppercase match and silently answers
    * anything else with the unfiltered national set (HTTP 200). The two routes below
@@ -717,7 +855,7 @@ describe('NonprofitExplorerService.search — state filter', () => {
       match: SEARCH_URL,
       respond: () => Response.json(populatedPage),
     });
-    for (const state of ['PR', 'GU', 'DC', 'ZZ', 'zz']) {
+    for (const state of ['PR', 'GU', 'DC', 'ZZ', 'zz', 'AA', 'AE', 'AP', 'FM', 'MH', 'PW']) {
       const result = await runToolContract(nonprofitSearchOrganizations, { query: 'food', state });
       expect(result.isError).toBeFalsy();
     }
@@ -727,6 +865,12 @@ describe('NonprofitExplorerService.search — state filter', () => {
       'DC',
       'ZZ',
       'ZZ',
+      'AA',
+      'AE',
+      'AP',
+      'FM',
+      'MH',
+      'PW',
     ]);
   });
 
@@ -1084,10 +1228,49 @@ describe('service-originated errors reaching the client', () => {
     });
 
     const notice = (result.structuredContent as { notice?: string }).notice ?? '';
-    expect(notice).toContain('990N');
+    expect(notice).toContain('BMF filing requirement: not on record');
+    expect(notice).toContain('PF filing requirement: not on record');
+    expect(notice).toContain('do not establish why a particular return is absent');
+    expect(notice).not.toContain('990N');
+    expect(notice).not.toContain('990-N');
 
     const rendered = result.content.map((b) => (b as { text?: string }).text ?? '').join('\n');
-    expect(rendered).toContain('990N');
+    expect(rendered).toContain('BMF filing requirement: not on record');
+    expect(rendered).toContain('PF filing requirement: not on record');
+    expect(rendered).toContain('do not establish why a particular return is absent');
+    expect(rendered).toContain(notice);
+  });
+
+  it('preserves BMF classification fields through the real service and both profile surfaces', async () => {
+    http.route({
+      match: ORG_URL,
+      respond: () =>
+        Response.json({
+          ...orgProfile,
+          organization: {
+            ...orgProfile.organization,
+            filing_requirement_code: 6,
+            pf_filing_requirement_code: 0,
+            affiliation_code: 9,
+            exemption_number: 0,
+          },
+        }),
+    });
+    const result = await runToolContract(nonprofitGetOrganization, { ein: 530196605 });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      filing_requirement: '6 — Not required to file (church)',
+      pf_filing_requirement: '0 — No 990-PF return',
+      affiliation: '9 — Subordinate in a group ruling',
+      group_exemption_number: 0,
+    });
+    const text = result.content
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('\n');
+    expect(text).toContain('6 — Not required to file (church)');
+    expect(text).toContain('0 — No 990-PF return');
+    expect(text).toContain('9 — Subordinate in a group ruling');
+    expect(text).toContain('0 (none assigned)');
   });
 
   it('still throws not_found for an EIN that resolves to no organization', async () => {

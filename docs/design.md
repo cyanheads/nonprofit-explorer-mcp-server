@@ -7,12 +7,12 @@
 | Name | Description | Key Inputs | Annotations |
 |:-----|:------------|:-----------|:------------|
 | `nonprofit_search_organizations` | Search 1.8M+ tax-exempt orgs by name/keyword with optional state, NTEE sector, and 501(c) type filters. Returns EINs for use with other tools. | `query`, `state`, `ntee_category`, `subsection_code`, `page` | `readOnlyHint: true` |
-| `nonprofit_get_organization` | Full profile for an org by EIN: legal name, address, NTEE classification, ruling year, IRS status, and financial summary from the most recent filing (revenue, expenses, assets, net assets). | `ein` | `readOnlyHint: true, idempotentHint: true` |
-| `nonprofit_get_filings` | All Form 990 filings for an EIN over time: year, form type, curated financial figures, revenue breakdown, executive compensation, and source PDF links. | `ein` | `readOnlyHint: true, idempotentHint: true` |
+| `nonprofit_get_organization` | Profile by EIN: legal identity, IRS classification and filing requirements, newest-return metadata, and latest extracted financial snapshot. | `ein` | `readOnlyHint: true, idempotentHint: true` |
+| `nonprofit_get_filings` | Form 990 history with financials, fundraising figures, executive compensation, and source PDF links. | `ein`, `from_year`, `to_year` | `readOnlyHint: true, idempotentHint: true` |
 
 ### Resources
 
-None. All data is reachable via the tool surface; search clients are tool-only so there is no payoff for adding resources.
+The published `nonprofit-explorer-guide` supplies diligence and comparison gates through the framework's skill resources. Organization and filing data remain on the tool surface.
 
 ### Prompts
 
@@ -99,22 +99,25 @@ Each step is independently testable.
 **Input schema:**
 
 ```ts
+const nteeGroups = ['A', 'B', 'CD', 'EFGH', 'IJKLMNOP', 'Q', 'RSTUVW', 'X', 'Y', 'Z'];
+
 z.object({
   query: z.string().describe(
     'Keyword search string. Searched against org name, the secondary name line, and city in order of relevance. ' +
     'Supports: quoted phrases ("Red Cross"), required terms (+evanston), excluded terms (-dental). ' +
     'Empty string returns all orgs within the active filters.'
   ),
-  state: z.string().length(2).optional().describe(
-    'Two-letter US state, territory, or military postal code (e.g., "WA", "NY", "PR"). ' +
+  state: z.string().optional().describe(
+    'US state or territory name, or state, territory, or military postal code (e.g., "Washington", "WA", "PR"). ' +
     'Use "ZZ" for foreign entities. Case-insensitive — normalized to uppercase before filtering. ' +
     'A code outside that set is rejected rather than silently returning national results. ' +
     'Restricts results to orgs headquartered in that state.'
   ),
   ntee_category: z.enum([
     '1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
+    ...nteeGroups.flatMap((letters) => [...letters, ...letters.toLowerCase()]),
   ]).optional().describe(
-    'NTEE (National Taxonomy of Exempt Entities) major group integer (1–10). ' +
+    'NTEE major group digit string (1–10) or case-insensitive major letter (A–Z), normalized to an upstream numbered group. ' +
     '1=Arts/Culture/Humanities, 2=Education, 3=Environment/Animals, 4=Health, ' +
     '5=Human Services, 6=International/Foreign Affairs, 7=Public/Societal Benefit, ' +
     '8=Religion Related, 9=Mutual/Membership Benefit, 10=Unknown/Unclassified.'
@@ -147,14 +150,14 @@ z.object({
     ein: number;                  // Employer Identification Number — use with other tools
     strein: string;               // EIN in "XX-XXXXXXX" format (preserves leading zeros)
     name: string;                 // Legal org name per IRS
-    sub_name: string | null;      // Legal name with the BMF secondary name line appended (division/service-center/chapter identifier), not a separate trade name
+    sub_name: string | null;      // Upstream legal name with an optional secondary line; can repeat name
     city: string | null;
     state: string | null;         // Two-letter abbreviation
     ntee_code: string | null;     // Full NTEE code (e.g. "E210") — more specific than the filter
     subseccd: number | null;      // 501(c) subsection code
     score: number;                // Relevance score (higher = better match)
   }>;
-  // Active filters echoed back — state is the normalized (uppercased) value actually sent
+  // Active filters echoed back — state names and NTEE letters use the upstream codes actually sent
   active_filters: {
     query: string;
     state: string | null;
@@ -187,8 +190,8 @@ errors: [
   {
     reason: 'invalid_state',
     code: JsonRpcErrorCode.ValidationError,
-    when: 'The state filter is not a US state, territory, or military postal code (or ZZ for foreign entities)',
-    recovery: 'Pass a two-letter USPS code such as WA, NY, or PR; use ZZ for foreign-address organizations, or omit state to search nationally.',
+    when: 'The state filter is not a recognized state or territory name, postal code, military postal code, or ZZ for foreign entities',
+    recovery: 'Pass a state or territory name such as Washington or Puerto Rico, or a postal code such as WA, NY, or PR; use ZZ for foreign-address organizations, or omit state to search nationally.',
   },
   {
     reason: 'pagination_ceiling',
@@ -213,7 +216,7 @@ errors: [
 
 ### `nonprofit_get_organization`
 
-**Purpose:** Full profile for a single org by EIN: legal identity, IRS classification, and a financial snapshot from the most recent filed 990. The "who is this org and how big are they?" lookup. Requires an EIN — use `nonprofit_search_organizations` first if you only have a name.
+**Purpose:** Full profile by EIN: legal identity, IRS classification and filing requirements, newest-return metadata, and the latest extracted financial snapshot. Requires an EIN — use `nonprofit_search_organizations` first if you only have a name.
 
 **Upstream call:** `GET /organizations/{ein}.json`
 
@@ -253,8 +256,18 @@ z.object({
   deductible: string | null;      // deductibility_code — 1 deductible, 2 not, 4 by treaty
   exempt_status: string | null;   // exempt_organization_status_code — 1 is unconditional exemption
   foundation_type: string | null; // foundation_code — public charity (10–25) vs private foundation (2–4); 0 and 9 are neither
+  filing_requirement: string | null; // IRS filing_requirement_code, raw code and decoded meaning
+  pf_filing_requirement: string | null; // IRS pf_filing_requirement_code
+  affiliation: string | null;    // IRS affiliation_code; does not establish group-return inclusion
+  group_exemption_number: number | null; // exemption_number; zero means none assigned
   bmf_tax_period: string | null;  // tax_period — latest BMF return period; often newer than latest_filing
-  // Latest filing snapshot (may be null if no filings_with_data)
+  latest_return: {
+    tax_prd_yr: number | null;
+    tax_prd: number | null;
+    form_type: string | null;    // Known labels normalized; unknown labels preserved
+    pdf_url: string | null;
+  } | null;                     // Newest across extracted and PDF-only histories
+  // Latest extracted snapshot (null if no filings_with_data)
   latest_filing: {
     tax_prd_yr: number;           // Fiscal year (e.g., 2023) — NOT the current year; data lags 1-2 years
     form_type: '990' | '990-EZ' | '990-PF';
@@ -303,7 +316,7 @@ errors: [
 
 ### `nonprofit_get_filings`
 
-**Purpose:** All Form 990 filings for an org over time — year by year financial figures, revenue breakdown, executive compensation, and source PDF links. Used for trend analysis, due diligence, and accessing the primary 990 documents.
+**Purpose:** Form 990 history, optionally restricted by inclusive fiscal-year bounds, for trend analysis, diligence, and access to source documents. Both arrays are ordered by full tax period descending; same-period returns remain present without implying amendment precedence.
 
 **Upstream call:** `GET /organizations/{ein}.json` (same as `nonprofit_get_organization`; reuses the org endpoint; both arrays are in the same response)
 
@@ -317,6 +330,8 @@ z.object({
   ]).describe(
     'Employer Identification Number. Use nonprofit_search_organizations to resolve an org name to its EIN.'
   ),
+  from_year: z.number().int().optional(), // Inclusive fiscal-year lower bound
+  to_year: z.number().int().optional(),   // Inclusive fiscal-year upper bound
 })
 ```
 
@@ -326,6 +341,8 @@ z.object({
 {
   ein: number;
   name: string;
+  from_year: number | null; // Applied inclusive bound; null means unbounded
+  to_year: number | null;   // Applied inclusive bound; null means unbounded
   filings: Array<{
     tax_prd_yr: number;           // Fiscal year — NOT the filing date; always show this prominently
     tax_prd: number;              // YYYYMM (month fiscal year ended, e.g., 202306 = June 2023 FY)
@@ -341,6 +358,14 @@ z.object({
     contributions_and_grants: number | null;  // totcntrbgfts (990), totcntrbs (990-EZ), grscontrgifts (990-PF)
     program_service_revenue: number | null;   // totprgmrevnue (990), prgmservrev (990-EZ), null (990-PF)
     investment_income: number | null;         // invstmntinc (990), othrinvstinc (990-EZ), intrstrvnue + dividndsamt (990-PF, both required)
+    other_salaries_and_wages: number | null;  // 990 othrsalwages, IX 7A
+    payroll_taxes: number | null;             // 990 payrolltx, IX 10A
+    professional_fundraising_fees: number | null; // 990 profndraising, IX 11eA
+    fundraising_events_gross: number | null;  // 990 grsincfndrsng VIII 8a; EZ grsrevnuefndrsng I 6b
+    fundraising_events_direct_expenses: number | null; // 990 lessdirfndrsng, VIII 8b
+    fundraising_events_net: number | null;    // 990 netincfndrsng, VIII 8c
+    gaming_and_fundraising_direct_expenses: number | null; // EZ direxpns, I 6c
+    gaming_and_fundraising_net: number | null; // EZ netincfndrsng, I 6d
     grants_paid: number | null;               // 990-PF contrpdpbks, Part I line 25 column (a)
     distributable_amount: number | null;       // 990-PF distribamt, Part X line 7: required amount, not payments
     fair_market_value_assets: number | null;   // 990-PF fairmrktvalamt, header Item I
@@ -356,11 +381,10 @@ z.object({
       fundraising_expenses: number | null;     // profndraising (professional fundraising fees)
       note: string;  // Source of the functional allocation
     } | null;
-    // Executive compensation — always present; every form type carries one of the two fields
-    // Field varies by form type: compnsatncurrofcr (990/990-EZ) vs compofficers (990-PF)
+    // Executive compensation — always present; 990-EZ has no extracted source
     executive_compensation: {
       amount: number | null;
-      field_name: string;  // Source field name for transparency: "compnsatncurrofcr" or "compofficers"
+      field_name: string | null; // compnsatncurrofcr (990), compofficers (PF), null (EZ)
       form_type: '990' | '990-EZ' | '990-PF';  // Which form this came from
       note: string;        // e.g., "990: total compensation of current officers, directors, trustees, key employees"
     };
@@ -368,32 +392,24 @@ z.object({
   // Filings with PDF links only (no extracted financial data)
   filings_pdf_only: Array<{
     tax_prd_yr: number;
+    tax_prd: number | null; // Full period, retained to distinguish same-year returns
     form_type_str: string;  // "990", "990EZ", "990PF"
     pdf_url: string | null;
   }>;
-  total_filings_with_data: number;
-  total_filings_pdf_only: number;
+  total_filings_with_data: number; // Unfiltered count
+  total_filings_pdf_only: number;  // Unfiltered count
   data_source: string;            // Top-level response.data_source (ProPublica + IRS attribution text)
   propublica_url: string;
 }
 ```
 
-**Enrichment:**
+**Selection and enrichment:**
 
-```ts
-enrichment: {
-  notice: z.string().optional().describe(
-    'Present when the organization resolved but Nonprofit Explorer holds no filing of any ' +
-    'kind for it — names the org and why the filing history is empty. An empty filings ' +
-    'array without this notice means the org has filings that carry a PDF but no extracted ' +
-    'data; read filings_pdf_only.'
-  ),
-}
-```
+Year bounds apply to `tax_prd_yr` in both collections and are echoed with null for omitted bounds. Reversed bounds are a validation error with recovery guidance. Counts describe the complete upstream history; selected arrays describe the requested interval. A selected interval with no returns succeeds and is distinguished from an entirely absent history.
 
-The notice fires only when both upstream arrays are empty, so its absence does not mean the extracted set is complete — an org whose only filings are older PDF-only ones gets an empty `filings`, no notice, and a populated `filings_pdf_only`.
+For a real organization with no returns in either upstream array, both tools share a notice derived from IRS BMF filing requirements. Code 02 supports a 990-N explanation; code 06 identifies the church exemption, and code 13 retains the published religious-organization exemption. Unknown codes and missing values remain distinct. Affiliation and group exemption alone do not establish inclusion in a group return. The notice contextualizes availability without asserting why a particular filing is missing, noncompliance, or that the organization never filed.
 
-An EIN that resolves to a real organization with no 990 on record is a *successful* lookup with an empty result set — the org's name is already in hand, and "this org has never filed a 990" is a citable fact about it. It returns `filings: []` plus a notice, never an error, matching `nonprofit_search_organizations`'s treatment of a zero-match query and `nonprofit_get_organization`'s `latest_filing: null` on the same underlying response.
+Per-form invariant notes render once with explicit scope; every selected filing retains its financial values, source fields, null meanings, and links. 990-EZ lines 6c–6d combine gaming and fundraising, so they have separate outputs from full-990 event-only expenses and net income. No functional allocation or ratio is inferred.
 
 **Error contract:**
 
@@ -422,7 +438,8 @@ errors: [
 Not computed. `program_expense_ratio` is `null` on every filing, for every form type — see Decision 3. `format()` renders the section with a line stating that the split lives in Part IX of the source PDF, so a `content[]`-only client sees the same fact the null in `structuredContent` carries.
 
 **Executive compensation field mapping:**
-- `formtype: 0` or `1` (990/990-EZ): `compnsatncurrofcr` — total compensation of current officers, directors, trustees, and key employees
+- `formtype: 0` (990): `compnsatncurrofcr` — total compensation of current officers, directors, trustees, and key employees
+- `formtype: 1` (990-EZ): amount and field name are null; compensation is not extracted. Read Part IV of the PDF
 - `formtype: 2` (990-PF): `compofficers` — compensation of officers, directors, trustees
 
 Both `field_name` and a plain-English `note` are included in the output so downstream consumers (and the source PDF) can verify the figure.
@@ -448,8 +465,8 @@ The API has only two endpoints. `nonprofit_get_organization` and `nonprofit_get_
 **1. Two tools on one upstream endpoint**
 `nonprofit_get_organization` and `nonprofit_get_filings` both call `GET /organizations/{ein}.json`. The response contains both `organization` (profile) and `filings_with_data` (array). Splitting into two tools is correct: profile lookup and filing history are distinct agent intents. The service method fetches once; both tools call the same service method and each extract what they need. This is more honest than either forcing the agent to call one tool to get data it doesn't want, or silently including filing arrays in the profile response.
 
-**2. NTEE filter accepts integers 1–10, not letter codes**
-The API docs and live probing confirm: `ntee[id]` accepts integers 1–10, not NTEE letter codes like "K" (Food) or "E" (Health). Letter codes cause HTTP 500. The enum in the input schema uses string literals `'1'`–`'10'` with clear labels in `.describe()`. The server translates the idea.md's "resolve human NTEE terms to codes" into resolving human sector names to these integers.
+**2. Normalize NTEE letters to upstream groups**
+The upstream `ntee[id]` accepts numbered groups, while organization records contain letter-prefixed NTEE codes. The server accepts digit strings `1`–`10` and major letters, then normalizes both the request and echoed filters: A→1, B→2, C–D→3, E–H→4, I–P→5, Q→6, R–W→7, X→8, Y→9, Z→10. This is a coarse sector selection, not an exact NTEE sub-code filter.
 
 **3. Program expense ratio: not derivable, so not derived**
 `program_expense_ratio` is `null` on every filing. `totfuncexpns` is Form 990 Part IX column (A); the program-service total is column (B), line 25 — a separately allocated column ProPublica does not return. Part IX allocates *every* expense line (occupancy, professional fees, travel, IT, insurance, depreciation, …) across program, management, and fundraising, so subtracting officer compensation, other wages, and professional fundraising fees from the column (A) total cannot reconstruct it. A live pull of the fullest filing shape the API returns (67 fields) has all three subtrahends populated and still carries no program-service figure, so the gap is structural rather than a sparse-input problem — and on a 990-EZ, which has no Part IX allocation at all, the three fields are absent entirely and the residual reported a 100% program ratio.
@@ -457,7 +474,7 @@ The API docs and live probing confirm: `ntee[id]` accepts integers 1–10, not N
 The field and its nested shape are retained (nullable) so a future source that reports the real allocation can populate them without a schema change. The independently sourced figures — total expenses, revenue breakdown, executive compensation, PDF link — are unaffected. Deriving the real ratio requires parsing IRS 990 XML/PDF filings, which is out of scope.
 
 **4. Form type differences handled explicitly**
-990 (`formtype: 0`), 990-EZ (`formtype: 1`), and 990-PF (`formtype: 2`) have different field sets, selected independently for each filing. Net assets use `totnetassetend` / `totnetassetsend` / `tfundnworth`; contributions use `totcntrbgfts` / `totcntrbs` / `grscontrgifts`; program revenue uses `totprgmrevnue` / `prgmservrev` / null. Investment income uses `invstmntinc` / `othrinvstinc` / the sum of `intrstrvnue` and `dividndsamt`. The PF sum is Part I column (a) lines 3–4, savings interest plus dividends and securities interest, excluding capital gains, rents, and net investment income; both operands must exist. PF grants paid and required distributable amount remain distinct, with no compliance inference. Executive compensation continues to use `compnsatncurrofcr` for 990/990-EZ and `compofficers` for 990-PF. Missing amounts stay null; reported zero stays zero.
+990 (`formtype: 0`), 990-EZ (`formtype: 1`), and 990-PF (`formtype: 2`) have different field sets, selected independently for each filing. Net assets use `totnetassetend` / `totnetassetsend` / `tfundnworth`; contributions use `totcntrbgfts` / `totcntrbs` / `grscontrgifts`; program revenue uses `totprgmrevnue` / `prgmservrev` / null. Investment income uses `invstmntinc` / `othrinvstinc` / the sum of `intrstrvnue` and `dividndsamt`. The PF sum is Part I column (a) lines 3–4, savings interest plus dividends and securities interest, excluding capital gains, rents, and net investment income; both operands must exist. PF grants paid and required distributable amount remain distinct, with no compliance inference. Executive compensation uses `compnsatncurrofcr` for 990 and `compofficers` for 990-PF; 990-EZ has no extracted compensation source. Missing amounts stay null; reported zero and negative net income remain intact.
 
 **5. EIN not-found detection requires three checks**
 Live probing reveals three distinct patterns — all must be treated as `not_found`:
@@ -468,7 +485,7 @@ Live probing reveals three distinct patterns — all must be treated as `not_fou
 Detection order in the service layer: (1) non-2xx → check for `{"error": ...}` JSON → `not_found`; (2) 200 with `id === 0` → `not_found`; (3) 200 with `organization.name === "Unknown Organization"` AND `organization.address === null` → `not_found`. Note: a real sparse org (in the IRS BMF but no 990 filings) has a real org name — that is a successful lookup with an empty filing list, not `not_found`.
 
 **6. `pdf_url` can be null in filings_with_data**
-The API marks `pdf_url` as nullable in the response schema; IRS PDF processing batches occasionally lag behind the extracted financial data, leaving `pdf_url: null` temporarily. The output schema marks `pdf_url` as `string | null`. The format function renders "PDF not yet available for this period" when null rather than omitting the field silently. The `filings_pdf_only` array (from `filings_without_data`) surfaces older filings that have a PDF but no extracted data.
+The API marks `pdf_url` as nullable in the response schema; IRS PDF processing batches occasionally lag behind the extracted financial data, leaving `pdf_url: null` temporarily. The output schema marks `pdf_url` as `string | null`. The format function renders "PDF not yet available for this period" when null rather than omitting the field silently. The `filings_pdf_only` array (from `filings_without_data`) surfaces returns without extracts, including returns newer than the latest extracted snapshot. `latest_return` compares both collections by tax period; unknown form labels remain visible.
 
 **7. Search total_results caps at 10000, and pagination has four distinguishable end states**
 Verified: when filters return more than 10000 results, the API reports `total_results: 10000` and `num_pages: 400`. This is an API ceiling, not the actual count. The output schema documents the field's ceiling as static prose; the runtime signal that *this* response hit it rides the enrichment notice, so it reaches `structuredContent` and `content[]` alike.
@@ -484,14 +501,14 @@ The boundary itself has four shapes, and the HTTP status alone does not separate
 
 `total_results` — not the status code — is what separates a zero-match query from an exhausted page, since 404 covers both. Only the 400 shape is an error: it is a deterministic input problem the caller must correct by narrowing the query or lowering `page`, so it is non-retryable rather than the `upstream_error` a tolerated-status list of `[404]` alone produced. A 400 whose body is not a pagination failure stays `upstream_error` — silently reading it as an empty result set would reintroduce the wrong-answer failure mode.
 
-**8. No resources or prompts**
-The workflow is linear: search → profile → filings. All data reachable via tools. No stable URI pattern earns a resource (there's no cross-session injectable context that would help). No recurring message template warrants a prompt.
+**8. Skill resources carry interpretation gates**
+Search → profile → filings supplies the data, but diligence also requires identity, coverage, and cross-form comparability checks. One published guide carries these shared gates without repeating tool schemas. No recurring message template warrants a prompt.
 
 **9. Attribution in every response**
 The `data_source` field from the API carries ProPublica + IRS attribution text. Every tool passes it through in the output and renders it in `format()`. ProPublica asks for courtesy credit; surfacing it in `format()` text ensures it reaches both `structuredContent` (Claude Code) and `content[]` (Claude Desktop) clients.
 
 **10. The state filter is validated before the request, not after**
-ProPublica honors `state[id]` only on an exact match against a real postal code. Lowercase (`wa`), title-case (`Wa`), and a syntactically valid but nonexistent code (`XX`) are all answered with HTTP 200 and the **unfiltered national result set** — a plausible-looking wrong answer, not an error. The handler therefore uppercases the input and rejects anything outside the USPS state/territory/military set plus `ZZ`.
+ProPublica honors `state[id]` only on an exact match against a real postal code. Lowercase (`wa`), title-case (`Wa`), and a syntactically valid but nonexistent code (`XX`) are all answered with HTTP 200 and the **unfiltered national result set** — a plausible-looking wrong answer, not an error. The server trims and normalizes state/territory names and postal codes before requesting, retaining military codes, freely associated states, and `ZZ`. Unrecognized values fail before an upstream request.
 
 The rejection lives in the handler rather than the input schema deliberately. The MCP SDK validates tool arguments against the Zod input schema *before* the registered handler runs, so a `.regex()` / `.refine()` / `z.enum()` rejection surfaces as a raw JSON-RPC `-32602` carrying the SDK's generic message — never reaching `ctx.fail`, the tool's `errors[]` contract, or its recovery hint. Validating in the handler keeps the failure inside the typed error path, where the caller gets `invalid_state` plus an actionable next step.
 
@@ -519,15 +536,15 @@ The labels stay distinct per condition, because the nulls mean different things 
 
 `Not on record` and `Not reported` are the pair most easily conflated, so the boundary is the source: anything read from the Business Master File that the IRS never recorded is `Not on record`, and `Not reported` is reserved for a figure an organization left blank on a *filing*, where the enclosing section header already names which filing. Naming an org's own omission on a due-diligence surface is a claim about the org, so it is not applied to values the IRS simply never captured.
 
-The form type picks the label where it decides the meaning: null `program_service_revenue` on a 990-PF is inapplicable, the same null on a 990 is unextracted. Missing PF contributions and interest/dividend components are unextracted. Profiles render separate extracted/PDF-only counts; only an entirely empty history offers the possible 990N explanation, while PDF-only histories direct callers to `nonprofit_get_filings`.
+The form type picks the label where it decides the meaning: null `program_service_revenue` on a 990-PF is inapplicable, the same null on a 990 is unextracted. Missing PF contributions and interest/dividend components are unextracted. Profiles render separate extracted/PDF-only counts; an empty-history notice mentions 990-N only when supported by filing requirement code 02, while PDF-only histories direct callers to the source returns.
 
 ---
 
 ## Known Limitations
 
 - **Data lag:** 990 filings are annual and IRS processing adds further delay. The most recent `tax_prd_yr` is typically 1–2 years behind the current year. The tools surface `tax_prd_yr` prominently; agents must not present these figures as current.
-- **No individual officer compensation detail:** The extract includes total officer compensation (`compnsatncurrofcr`) but not per-officer breakdown. Individual named executive pay appears only in Schedule J of the full 990 PDF. Users needing per-person data must read the linked PDF.
-- **Small orgs have no filings:** Form 990N (e-Postcard) returns from organizations under $50,000 in revenue are not in Nonprofit Explorer. Such an org may still resolve from the IRS BMF with a real name and address, in which case `nonprofit_get_filings` returns an empty `filings` array with a notice; an EIN that resolves to nothing at all is `not_found`.
+- **No individual officer compensation detail:** Full-990 and PF extracts expose aggregate compensation, not named-officer pay. Read the source filing's officer section and applicable schedules; for 990-EZ, Part IV is also required for compensation absent from the extract.
+- **Incomplete filing coverage:** Form 990-N e-Postcards are outside this filing history. Other filing exemptions and coverage gaps can also leave an organization with no returns here. BMF codes contextualize the result but do not establish the cause; an unknown EIN remains `not_found`.
 - **No program expense ratio:** ProPublica's extract carries no Form 990 Part IX column (B) program-service total, so the program/management/fundraising split cannot be derived from it (see Decision 3). `program_expense_ratio` is always `null`; the split is available only by reading Part IX of the linked PDF.
 - **No bulk search or EIN lookup list:** The API has no batch endpoint. Multiple EIN lookups require separate requests.
 - **Search results beyond 10,000 are unreachable:** ProPublica refuses any page whose result offset reaches 10,000, so pages above 399 cannot be fetched at all (see Decision 7). `nonprofit_search_organizations` reports this as `pagination_ceiling` and directs the caller to narrow the query; there is no workaround that walks past the ceiling.

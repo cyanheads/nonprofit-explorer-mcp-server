@@ -1,0 +1,30 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "nonprofit-explorer-mcp-server",
+  "version": "0.2.0",
+  "description": "Search and explore 1.8M+ US nonprofits, fetch Form 990 financials, and access IRS filing history via MCP. STDIO or Streamable HTTP.",
+  "author": {
+    "name": "Casey Hand",
+    "email": "casey@caseyjhand.com",
+    "url": "https://caseyjhand.com"
+  },
+  "homepage": "https://github.com/cyanheads/nonprofit-explorer-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/nonprofit-explorer-mcp-server",
+  "license": "Apache-2.0",
+  "keywords": [
+    "nonprofit",
+    "propublica",
+    "irs",
+    "form-990",
+    "tax-exempt",
+    "charity",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "typescript",
+    "bun",
+    "stdio",
+    "streamable-http",
+    "ai-agent"
+  ]
+}

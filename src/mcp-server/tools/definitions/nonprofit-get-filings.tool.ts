@@ -5,6 +5,9 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline, markdownLink } from '@cyanheads/mcp-ts-core/utils';
+import { compareTaxPeriods } from '@/services/nonprofit-explorer/filing-history.js';
+import { emptyHistoryNotice } from '@/services/nonprofit-explorer/filing-requirements.js';
 import {
   getNonprofitExplorerService,
   normalizeEin,
@@ -40,7 +43,7 @@ function formTypeLabel(ft: number | undefined): '990' | '990-EZ' | '990-PF' {
  */
 function buildExecComp(filing: RawFiling): {
   amount: number | null;
-  field_name: 'compnsatncurrofcr' | 'compofficers';
+  field_name: 'compnsatncurrofcr' | 'compofficers' | null;
   form_type: '990' | '990-EZ' | '990-PF';
   note: string;
 } {
@@ -54,21 +57,28 @@ function buildExecComp(filing: RawFiling): {
     };
   }
 
-  // 990 / 990-EZ: compnsatncurrofcr
+  if (filing.formtype === 1) {
+    return {
+      amount: null,
+      field_name: null,
+      form_type: '990-EZ',
+      note: '990-EZ officer compensation is not extracted by this data source. Read Part IV of the source PDF for officer detail.',
+    };
+  }
+
+  // Form 990: compnsatncurrofcr
   return {
     amount: filing.compnsatncurrofcr ?? null,
     field_name: 'compnsatncurrofcr',
     form_type: formTypeLabel(filing.formtype),
-    note:
-      '990/990-EZ: total compensation of current officers, directors, trustees, and key employees. ' +
-      'Per-officer breakdown requires Schedule J in the source PDF.',
+    note: '990: total compensation of current officers, directors, trustees, and key employees. Per-officer breakdown requires Schedule J in the source PDF.',
   };
 }
 
 export const nonprofitGetFilings = tool('nonprofit_get_filings', {
   title: 'Get Nonprofit Filings',
   description:
-    'All Form 990 filings for a tax-exempt org by EIN: year-by-year revenue, expenses, assets, liabilities, net assets, revenue breakdown, executive compensation, and source PDF links. Use for trend analysis, due diligence, and accessing primary 990 documents. The filing year (tax_prd_yr) is the fiscal year of the return — data lags 1–2 years; always cite the year. An organization that resolves but has filed no 990 returns an empty filings array with a notice, not an error. Also returns filings_pdf_only — older filings with a PDF but no extracted financial data. Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
+    'Form 990 history by EIN with extracted financials, form-specific compensation, and PDF-only returns. Optional inclusive from_year/to_year bounds select fiscal years across both histories; omitted bounds return full history. Unfiltered totals remain available. Records are sorted by full tax period without amendment precedence. Empty dataset history succeeds with BMF context; an empty selected window does not imply no history. Data lags 1–2 years; always cite tax_prd_yr. Data from ProPublica Nonprofit Explorer and IRS Form 990 filings.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
@@ -89,11 +99,31 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
       .describe(
         'Employer Identification Number. Use nonprofit_search_organizations to resolve an org name to its EIN.',
       ),
+    from_year: z
+      .number()
+      .int()
+      .optional()
+      .describe('Inclusive minimum fiscal year (tax_prd_yr). Omit for no lower bound.'),
+    to_year: z
+      .number()
+      .int()
+      .optional()
+      .describe('Inclusive maximum fiscal year (tax_prd_yr). Omit for no upper bound.'),
   }),
 
   output: z.object({
     ein: z.number().describe('Employer Identification Number as integer.'),
     name: z.string().describe('Legal org name per IRS.'),
+    from_year: z
+      .number()
+      .int()
+      .nullable()
+      .describe('Applied inclusive lower fiscal-year bound. Null when omitted.'),
+    to_year: z
+      .number()
+      .int()
+      .nullable()
+      .describe('Applied inclusive upper fiscal-year bound. Null when omitted.'),
     filings: z
       .array(
         z
@@ -160,6 +190,54 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
               .nullable()
               .describe(
                 'Investment income in USD: invstmntinc (990), othrinvstinc (990-EZ), or intrstrvnue plus dividndsamt (990-PF Part I column (a), lines 3–4: savings interest plus dividends and securities interest; excludes capital gains, rents, and net investment income). PF requires both components; null when not extracted.',
+              ),
+            other_salaries_and_wages: z
+              .number()
+              .nullable()
+              .describe(
+                '990 Part IX line 7A, othrsalwages, USD. Null when unextracted or inapplicable to EZ/PF.',
+              ),
+            payroll_taxes: z
+              .number()
+              .nullable()
+              .describe(
+                '990 Part IX line 10A, payrolltx, USD. Null when unextracted or inapplicable to EZ/PF.',
+              ),
+            professional_fundraising_fees: z
+              .number()
+              .nullable()
+              .describe(
+                '990 Part IX line 11eA, profndraising, USD. Null when unextracted or inapplicable to EZ/PF.',
+              ),
+            fundraising_events_gross: z
+              .number()
+              .nullable()
+              .describe(
+                'Event gross income excluding separately reported contributions: 990 VIII 8a grsincfndrsng or EZ I 6b grsrevnuefndrsng, USD. Null when unextracted or inapplicable to PF.',
+              ),
+            fundraising_events_direct_expenses: z
+              .number()
+              .nullable()
+              .describe(
+                '990 VIII 8b lessdirfndrsng, USD. Null when unextracted or inapplicable to EZ/PF; EZ combines gaming and events separately.',
+              ),
+            fundraising_events_net: z
+              .number()
+              .nullable()
+              .describe(
+                '990 VIII 8c netincfndrsng, USD; may be negative. Null when unextracted or inapplicable to EZ/PF.',
+              ),
+            gaming_and_fundraising_direct_expenses: z
+              .number()
+              .nullable()
+              .describe(
+                'EZ I 6c direxpns, USD, combined gaming and fundraising expenses. Null when unextracted or inapplicable to 990/PF.',
+              ),
+            gaming_and_fundraising_net: z
+              .number()
+              .nullable()
+              .describe(
+                'EZ I 6d netincfndrsng, USD, combined gaming and fundraising net. Null when unextracted or inapplicable to 990/PF.',
               ),
             grants_paid: z
               .number()
@@ -236,11 +314,14 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
                 amount: z
                   .number()
                   .nullable()
-                  .describe('Total executive compensation in USD. Null when not reported.'),
+                  .describe(
+                    'Total executive compensation in USD. Null when absent on supported 990/PF forms; always null on 990-EZ because the source does not extract it.',
+                  ),
                 field_name: z
                   .enum(['compnsatncurrofcr', 'compofficers'])
+                  .nullable()
                   .describe(
-                    'Source API field the amount was read from — compnsatncurrofcr on 990 and 990-EZ, compofficers on 990-PF.',
+                    'Source API field: compnsatncurrofcr on 990, compofficers on 990-PF. Null on 990-EZ, which has no extracted officer-compensation field.',
                   ),
                 form_type: z
                   .enum(['990', '990-EZ', '990-PF'])
@@ -252,7 +333,7 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
                   ),
               })
               .describe(
-                'Executive compensation summary. Field varies by form type. Per-officer breakdown requires Schedule J in the source PDF.',
+                'Executive compensation summary. 990-EZ is unextracted; see Part IV of its PDF. Supported-form missing amounts remain null.',
               ),
           })
           .describe('Form 990 filing with extracted financial data for one fiscal year.'),
@@ -263,6 +344,10 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
         z
           .object({
             tax_prd_yr: z.number().describe('Fiscal year of this filing.'),
+            tax_prd: z
+              .number()
+              .nullable()
+              .describe('YYYYMM tax period. Null when absent from the PDF-only record.'),
             form_type_str: z
               .string()
               .describe('Form type string as returned by API ("990", "990EZ", "990PF").'),
@@ -271,11 +356,17 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
               .nullable()
               .describe('Source Form 990 PDF link. Null for some batches.'),
           })
-          .describe('Older filing with a PDF link but no extracted financial data.'),
+          .describe(
+            'Return with a PDF link but no extracted financial data; may be newer than extracted history.',
+          ),
       )
-      .describe('Older filings with a PDF but no extracted financial data.'),
-    total_filings_with_data: z.number().describe('Count of filings with extracted financial data.'),
-    total_filings_pdf_only: z.number().describe('Count of PDF-only filings (no extracted data).'),
+      .describe('PDF-only returns sorted by full tax period, retaining equal-period entries.'),
+    total_filings_with_data: z
+      .number()
+      .describe('Unfiltered count of filings with extracted financial data.'),
+    total_filings_pdf_only: z
+      .number()
+      .describe('Unfiltered count of PDF-only filings (no extracted data).'),
     data_source: z.string().describe('ProPublica + IRS attribution text.'),
     propublica_url: z.string().describe('ProPublica Nonprofit Explorer URL for this org.'),
   }),
@@ -285,11 +376,23 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
       .string()
       .optional()
       .describe(
-        'Present when the organization resolved but Nonprofit Explorer holds no filing of any kind for it — names the org and why the filing history is empty. An empty filings array without this notice means the org has filings that carry a PDF but no extracted data; read filings_pdf_only.',
+        'Present only when the complete dataset history is empty, with BMF context and no inferred cause. A selected window can be empty while unfiltered totals show existing history.',
       ),
   },
 
+  enrichmentTrailer: {
+    notice: {
+      render: (notice) => (notice === undefined ? '' : `> ${escapeMarkdownInline(notice)}`),
+    },
+  },
+
   errors: [
+    {
+      reason: 'invalid_year_range',
+      code: JsonRpcErrorCode.InvalidParams,
+      when: 'from_year is greater than to_year',
+      recovery: 'Set from_year less than or equal to to_year, or omit either bound.',
+    },
     {
       reason: 'timeout',
       code: JsonRpcErrorCode.Timeout,
@@ -325,6 +428,8 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
   ],
 
   async handler(input, ctx) {
+    if (input.from_year != null && input.to_year != null && input.from_year > input.to_year)
+      throw ctx.fail('invalid_year_range');
     const ein = normalizeEin(input.ein);
     ctx.log.info('Fetching nonprofit filings', { ein });
 
@@ -338,24 +443,14 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
     const filingsWithData = raw.filings_with_data ?? [];
     const filingsWithoutData = raw.filings_without_data ?? [];
 
-    /**
-     * The EIN resolved to a real organization that has simply never filed a 990 — a
-     * successful lookup with an empty result set, not a failure. Returning it as an
-     * error would leave a client branching on `isError` unable to tell "this org has
-     * never filed" from "the lookup failed".
-     */
     if (filingsWithData.length === 0 && filingsWithoutData.length === 0) {
-      ctx.enrich.notice(
-        `Organization "${org.name}" (EIN ${ein}) resolved, but Nonprofit Explorer holds no Form 990 for it. ` +
-          'Organizations with under $50,000 in annual revenue file Form 990N (e-Postcard), which this dataset does not cover. ' +
-          'Filings also lag 1–2 years, so a recently formed organization may not have one on record yet.',
-      );
+      ctx.enrich.notice(emptyHistoryNotice(org, ein));
     }
 
-    // Sort by fiscal year descending (newest first)
-    const sortedFilings = [...filingsWithData].sort(
-      (a, b) => (b.tax_prd_yr ?? 0) - (a.tax_prd_yr ?? 0),
-    );
+    const inWindow = (f: { tax_prd_yr?: number }) =>
+      (input.from_year == null || (f.tax_prd_yr != null && f.tax_prd_yr >= input.from_year)) &&
+      (input.to_year == null || (f.tax_prd_yr != null && f.tax_prd_yr <= input.to_year));
+    const sortedFilings = filingsWithData.filter(inWindow).sort(compareTaxPeriods);
 
     const mappedFilings = sortedFilings.map((f) => ({
       tax_prd_yr: f.tax_prd_yr ?? 0,
@@ -388,6 +483,21 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
       distributable_amount: f.formtype === 2 ? (f.distribamt ?? null) : null,
       fair_market_value_assets: f.formtype === 2 ? (f.fairmrktvalamt ?? null) : null,
       net_investment_income: f.formtype === 2 ? (f.netinvstinc ?? null) : null,
+      other_salaries_and_wages:
+        f.formtype === 1 || f.formtype === 2 ? null : (f.othrsalwages ?? null),
+      payroll_taxes: f.formtype === 1 || f.formtype === 2 ? null : (f.payrolltx ?? null),
+      professional_fundraising_fees:
+        f.formtype === 1 || f.formtype === 2 ? null : (f.profndraising ?? null),
+      fundraising_events_gross:
+        f.formtype === 2
+          ? null
+          : ((f.formtype === 1 ? f.grsrevnuefndrsng : f.grsincfndrsng) ?? null),
+      fundraising_events_direct_expenses:
+        f.formtype === 1 || f.formtype === 2 ? null : (f.lessdirfndrsng ?? null),
+      fundraising_events_net:
+        f.formtype === 1 || f.formtype === 2 ? null : (f.netincfndrsng ?? null),
+      gaming_and_fundraising_direct_expenses: f.formtype === 1 ? (f.direxpns ?? null) : null,
+      gaming_and_fundraising_net: f.formtype === 1 ? (f.netincfndrsng ?? null) : null,
       /**
        * Not derived. `totfuncexpns` is Form 990 Part IX column (A); the program-service
        * total is column (B), which ProPublica does not return, and Part IX allocates
@@ -398,17 +508,23 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
       executive_compensation: buildExecComp(f),
     }));
 
-    const mappedPdfOnly = filingsWithoutData.map((f) => ({
-      tax_prd_yr: f.tax_prd_yr ?? 0,
-      form_type_str: f.formtype_str ?? '',
-      pdf_url: f.pdf_url ?? null,
-    }));
+    const mappedPdfOnly = filingsWithoutData
+      .filter(inWindow)
+      .sort(compareTaxPeriods)
+      .map((f) => ({
+        tax_prd_yr: f.tax_prd_yr ?? 0,
+        tax_prd: f.tax_prd ?? null,
+        form_type_str: f.formtype_str ?? '',
+        pdf_url: f.pdf_url ?? null,
+      }));
 
     const einNum = org.ein ?? ein;
 
     return {
       ein: einNum,
       name: org.name ?? '',
+      from_year: input.from_year ?? null,
+      to_year: input.to_year ?? null,
       filings: mappedFilings,
       filings_pdf_only: mappedPdfOnly,
       total_filings_with_data: filingsWithData.length,
@@ -421,13 +537,16 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
   format: (result) => {
     const lines: string[] = [];
 
-    lines.push(`# ${result.name} — Form 990 Filings`);
+    lines.push(`# ${escapeMarkdownInline(result.name)} — Form 990 Filings`);
     lines.push(`**EIN:** ${result.ein}`);
     lines.push(
-      `**Filings with data:** ${result.total_filings_with_data} | ` +
-        `**PDF-only filings:** ${result.total_filings_pdf_only}`,
+      `**Unfiltered filings with data:** ${result.total_filings_with_data} | ` +
+        `**Unfiltered PDF-only filings:** ${result.total_filings_pdf_only}`,
     );
-    lines.push(`**Profile:** ${result.propublica_url}`);
+    lines.push(`**Profile:** ${markdownLink(result.propublica_url, result.propublica_url)}`);
+    lines.push(
+      `**Fiscal-year bounds (inclusive):** from_year=${result.from_year ?? 'null (unbounded)'}; to_year=${result.to_year ?? 'null (unbounded)'}`,
+    );
     lines.push('');
     lines.push(
       '> ⚠️ Data lags 1–2 years. FY shown is the fiscal year, not the current year. Always cite the year.',
@@ -435,15 +554,21 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
 
     if (result.filings.length === 0) {
       lines.push('');
-      lines.push('*No Form 990 with extracted financial data on record for this organization.*');
+      lines.push(
+        result.from_year != null || result.to_year != null
+          ? '*No extracted filings in the selected fiscal-year window; unfiltered totals above describe the complete history.*'
+          : '*No Form 990 with extracted financial data on record for this organization.*',
+      );
     }
 
     for (const f of result.filings) {
       lines.push('');
       lines.push(`## FY ${f.tax_prd_yr} — ${f.form_type} (period: ${f.tax_prd})`);
 
-      lines.push(`**Source 990 PDF:** ${f.pdf_url ?? 'Not yet available for this period'}`);
-      lines.push(`**Last updated:** ${f.updated ?? 'Not provided'}`);
+      lines.push(
+        `**Source 990 PDF:** ${f.pdf_url ? markdownLink(f.pdf_url, f.pdf_url) : 'Not yet available for this period'}`,
+      );
+      lines.push(`**Last updated:** ${escapeMarkdownInline(f.updated ?? 'Not provided')}`);
 
       lines.push('');
       lines.push('### Financials');
@@ -463,36 +588,60 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
         `**Program Service Revenue:** ${money(f.program_service_revenue, programRevenueAbsent)}`,
       );
       lines.push(`**Investment Income:** ${money(f.investment_income)}`);
-      if (f.form_type === '990-PF') {
-        lines.push(
-          '990-PF investment income is Part I column (a), lines 3–4: savings interest plus dividends and securities interest; excludes capital gains, rents, and net investment income. Both components must be extracted.',
-        );
-      }
       const pfAbsent = f.form_type === '990-PF' ? NOT_EXTRACTED : notApplicableFor(f.form_type);
       lines.push('');
       lines.push('### 990-PF Foundation Financials');
-      lines.push(`**Grants Paid (Part I line 25 column (a)):** ${money(f.grants_paid, pfAbsent)}`);
-      lines.push(
-        `**Distributable Amount (required, Part X line 7):** ${money(f.distributable_amount, pfAbsent)}`,
-      );
-      lines.push(
-        `**Fair-Market-Value Assets (EoY, Item I):** ${money(f.fair_market_value_assets, pfAbsent)}`,
-      );
-      lines.push(
-        `**Net Investment Income (Part I line 27b):** ${money(f.net_investment_income, pfAbsent)}`,
-      );
-      if (f.form_type === '990-PF')
+      if (
+        f.form_type !== '990-PF' &&
+        f.grants_paid == null &&
+        f.distributable_amount == null &&
+        f.fair_market_value_assets == null &&
+        f.net_investment_income == null
+      ) {
         lines.push(
-          'The distributable amount is a payout requirement, not actual payments or a compliance measure.',
+          `**Grants Paid; Distributable Amount; Fair-Market-Value Assets; Net Investment Income:** ${pfAbsent}`,
         );
+      } else {
+        lines.push(
+          `**Grants Paid (Part I line 25 column (a)):** ${money(f.grants_paid, pfAbsent)}`,
+        );
+        lines.push(
+          `**Distributable Amount (required, Part X line 7):** ${money(f.distributable_amount, pfAbsent)}`,
+        );
+        lines.push(
+          `**Fair-Market-Value Assets (EoY, Item I):** ${money(f.fair_market_value_assets, pfAbsent)}`,
+        );
+        lines.push(
+          `**Net Investment Income (Part I line 27b):** ${money(f.net_investment_income, pfAbsent)}`,
+        );
+      }
+
+      lines.push('');
+      lines.push('### Salaries and Fundraising');
+      const only990 = f.form_type === '990' ? NOT_EXTRACTED : notApplicableFor(f.form_type);
+      const onlyEz = f.form_type === '990-EZ' ? NOT_EXTRACTED : notApplicableFor(f.form_type);
+      lines.push(`**Other Salaries & Wages:** ${money(f.other_salaries_and_wages, only990)}`);
+      lines.push(`**Payroll Taxes:** ${money(f.payroll_taxes, only990)}`);
+      lines.push(
+        `**Professional Fundraising Fees:** ${money(f.professional_fundraising_fees, only990)}`,
+      );
+      lines.push(
+        `**Fundraising Events Gross:** ${money(f.fundraising_events_gross, programRevenueAbsent)}`,
+      );
+      lines.push(
+        `**Fundraising Events Direct Expenses:** ${money(f.fundraising_events_direct_expenses, only990)}`,
+      );
+      lines.push(`**Fundraising Events Net:** ${money(f.fundraising_events_net, only990)}`);
+      lines.push(
+        `**Gaming and Fundraising Direct Expenses:** ${money(f.gaming_and_fundraising_direct_expenses, onlyEz)}`,
+      );
+      lines.push(`**Gaming and Fundraising Net:** ${money(f.gaming_and_fundraising_net, onlyEz)}`);
 
       const r = f.program_expense_ratio;
       lines.push('');
       lines.push('### Program Expense Ratio');
       if (r == null) {
-        lines.push(
-          `${NOT_DERIVABLE} — ProPublica returns no Form 990 Part IX program-service expense total. Read Part IX of the filing PDF for the program, management, and fundraising split.`,
-        );
+        lines.push(`${NOT_DERIVABLE} — see notes for this form below.`);
       } else {
         lines.push(`**Ratio:** ${r.ratio != null ? PCT(r.ratio) : NOT_DERIVABLE}`);
         lines.push(`**Program Expenses:** ${money(r.program_expenses, NOT_REPORTED)}`);
@@ -500,30 +649,61 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
         lines.push(`**Officer/Director Comp:** ${money(r.management_compensation, NOT_REPORTED)}`);
         lines.push(`**Other Salaries & Wages:** ${money(r.other_salaries, NOT_REPORTED)}`);
         lines.push(`**Professional Fundraising:** ${money(r.fundraising_expenses, NOT_REPORTED)}`);
-        lines.push(`*${r.note}*`);
+        lines.push(`*${escapeMarkdownInline(r.note)}*`);
       }
 
       const ec = f.executive_compensation;
       lines.push('');
       lines.push(`### Executive Compensation (${ec.form_type})`);
-      lines.push(`**Total (${ec.field_name}):** ${money(ec.amount, NOT_REPORTED)}`);
-      lines.push(`*${ec.note}*`);
+      lines.push(
+        `**Total (${ec.field_name ?? 'source field: null'}):** ${money(ec.amount, ec.field_name == null ? NOT_EXTRACTED : NOT_REPORTED)}`,
+      );
+    }
+
+    for (const form of new Set(result.filings.map((f) => f.form_type))) {
+      lines.push('');
+      lines.push(`## Notes applying to every ${form} extracted filing above`);
+      lines.push(
+        form === '990'
+          ? 'Program Expense Ratio: Not derivable from this data source — ProPublica returns no Form 990 Part IX program-service expense total. Read Part IX of the filing PDF for the program, management, and fundraising split.'
+          : `Program Expense Ratio: Not derivable from this data source — ${form} does not contain the Form 990 Part IX functional allocation across program, management, and fundraising.`,
+      );
+      if (form === '990-PF') {
+        lines.push(
+          '990-PF investment income is Part I column (a), lines 3–4: savings interest plus dividends and securities interest; excludes capital gains, rents, and net investment income. Both components must be extracted. The distributable amount is a payout requirement, not actual payments or a compliance measure.',
+        );
+      } else {
+        lines.push(
+          form === '990'
+            ? 'Other Salaries & Wages: Part IX 7A; Payroll Taxes: Part IX 10A; Professional Fundraising Fees: Part IX 11eA. Fundraising Events Gross/Direct Expenses/Net: Part VIII 8a/8b/8c. Null means not extracted.'
+            : 'Fundraising Events Gross: Part I 6b. Gaming and Fundraising Direct Expenses/Net: Part I 6c/6d combine gaming and events; no event-only split is extracted. Null applicable figures mean not extracted.',
+        );
+        lines.push('Fundraising Events Gross excludes contributions reported separately.');
+      }
+      for (const note of new Set(
+        result.filings
+          .filter((f) => f.form_type === form)
+          .map((f) => f.executive_compensation.note),
+      ))
+        lines.push(`*${escapeMarkdownInline(note)}*`);
     }
 
     if (result.filings_pdf_only.length > 0) {
       lines.push('');
-      lines.push('## Older Filings (PDF only — no extracted data)');
+      lines.push('## PDF-only Returns (no extracted data)');
       for (const f of result.filings_pdf_only) {
-        const pdfLine = f.pdf_url ? `[PDF](${f.pdf_url})` : 'PDF not available';
+        const pdfLine = f.pdf_url ? markdownLink('PDF', f.pdf_url) : 'PDF not available';
         // form_type_str is '' when the upstream record omits formtype_str; omit the
         // separator rather than rendering a dangling space before the colon.
-        const formLabel = f.form_type_str ? ` ${f.form_type_str}` : '';
-        lines.push(`- FY ${f.tax_prd_yr}${formLabel}: ${pdfLine}`);
+        const formLabel = f.form_type_str ? ` ${escapeMarkdownInline(f.form_type_str)}` : '';
+        lines.push(
+          `- FY ${f.tax_prd_yr}${formLabel}: ${pdfLine} (period: ${f.tax_prd ?? 'Not provided'})`,
+        );
       }
     }
 
     lines.push('');
-    lines.push(`*${result.data_source}*`);
+    lines.push(`*${escapeMarkdownInline(result.data_source)}*`);
 
     return [{ type: 'text', text: lines.join('\n') }];
   },

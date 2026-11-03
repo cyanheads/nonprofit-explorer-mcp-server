@@ -48,6 +48,24 @@ describe('nonprofitSearchOrganizations', () => {
     mockSearch(makeRawResponse([sampleOrg]));
   });
 
+  it.each([null, 'The Red Cross', 'The Red Cross Chapter 1', undefined])(
+    'preserves upstream secondary-name variant %s on both surfaces',
+    async (sub_name) => {
+      mockSearch(makeRawResponse([{ ...sampleOrg, sub_name }]));
+      const result = await runToolContract(nonprofitSearchOrganizations, {
+        query: 'red cross',
+        state: 'ae',
+        ntee_category: '5',
+      });
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({
+        organizations: [{ sub_name: sub_name ?? null }],
+        active_filters: { state: 'AE', ntee_category: '5' },
+      });
+      expect(JSON.stringify(result.content)).toContain(sub_name ?? 'Not on record');
+    },
+  );
+
   it('returns mapped organizations on a successful search', async () => {
     const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
     const input = nonprofitSearchOrganizations.input.parse({ query: 'red cross', page: 0 });

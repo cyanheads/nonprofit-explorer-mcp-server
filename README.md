@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/nonprofit-explorer-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/nonprofit-explorer-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/nonprofit-explorer-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/nonprofit-explorer-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.4.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/nonprofit-explorer-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/nonprofit-explorer-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -36,15 +36,16 @@ IRS Form 990 data for 1.8M+ tax-exempt organizations, via the ProPublica Nonprof
 | Tool | Description |
 |:---|:---|
 | `nonprofit_search_organizations` | Search 1.8M+ IRS-recognized tax-exempt organizations by name, keyword, city, or phrase with optional state, NTEE sector, and 501(c) filters |
-| `nonprofit_get_organization` | Full profile for one org by EIN: legal identity, IRS classification, ruling date, and a financial snapshot from the most recent Form 990 |
-| `nonprofit_get_filings` | All Form 990 filings for an org by EIN: year-by-year financials, revenue breakdown, executive compensation, and source PDF links |
+| `nonprofit_get_organization` | Full profile by EIN: legal identity, IRS classification, filing requirements, newest-return metadata, and latest extracted financial snapshot |
+| `nonprofit_get_filings` | Form 990 history by EIN, optionally filtered by fiscal year: financials, fundraising figures, executive compensation, and source PDF links |
 
 ## Capability reference
 
 ### `nonprofit_search_organizations` <sub>tool</sub>
 
 - Full-text query — supports quoted phrases (`"Red Cross"`), required terms (`+evanston`), excluded terms (`-dental`)
-- Optional filters: US state/territory or military postal code (`ZZ` for foreign entities; a code outside that set is rejected rather than silently returning national results), NTEE major sector (1–10), 501(c) subsection code (`3` covers both public charities and private foundations — see `foundation_type` on `nonprofit_get_organization` to tell them apart)
+- Optional filters: state/territory name or postal code (including military codes and `ZZ` for foreign entities), NTEE major sector (`1`–`10` or a case-insensitive major letter), and 501(c) subsection code (`3` covers both public charities and private foundations — see `foundation_type` on `nonprofit_get_organization` to tell them apart). Names and letters normalize to the upstream codes shown in `active_filters`; unrecognized states are rejected before a request
+- `sub_name` is the upstream legal name with an optional secondary line; it can repeat `name` or be null
 - Paginated at 25 per page (`page`, zero-indexed); `num_pages`, `per_page`, and `page_offset` track position
 - API caps total results at 10,000 — `total_results === 10000` means the actual count may be higher, and a page whose offset reaches that ceiling is refused (`pagination_ceiling`)
 - Zero matches and a page past the last one both succeed with an empty `organizations` array and a `notice` explaining which case it is
@@ -57,7 +58,8 @@ IRS Form 990 data for 1.8M+ tax-exempt organizations, via the ProPublica Nonprof
 - Accepts EIN as integer (`530196605`) or string with or without hyphen (`"53-0196605"`); use `nonprofit_search_organizations` first if you only have an org name
 - Returns legal identity, address, NTEE code, 501(c) type, and IRS ruling date
 - IRS Business Master File standing: deductibility (including the deductible-by-treaty case), exemption status, and public-charity vs. private-foundation classification — each decoded from its IRS code with the raw code retained
-- Financial snapshot from the most recent Form 990: revenue, expenses, assets, liabilities, net assets, plus the source PDF link
+- `latest_filing` is the latest extracted financial snapshot: revenue, expenses, assets, liabilities, net assets, and source PDF link. `latest_return` separately identifies the newest return across extracted and PDF-only histories; a newer return need not have extracted figures
+- Filing requirements, private-foundation filing requirements, affiliation, and group exemption number come from the IRS Business Master File. Empty-history guidance uses these codes without claiming why a particular filing is absent
 - `filing_count` counts filings with extracted data; `filing_count_pdf_only` separately counts PDFs without financial extracts. Use `nonprofit_get_filings` for those links; PDF-only histories have no financial snapshot
 - Data lags 1–2 years — `tax_prd_yr` in the snapshot is the fiscal year of the filing, not the current year
 
@@ -65,12 +67,14 @@ IRS Form 990 data for 1.8M+ tax-exempt organizations, via the ProPublica Nonprof
 
 ### `nonprofit_get_filings` <sub>tool</sub>
 
-- All Form 990 filings with extracted data, sorted newest first — per filing: revenue, expenses, assets, liabilities, net assets, revenue breakdown (contributions, program service, investment income), and the source PDF link
+- All Form 990 filings with extracted data, sorted by full tax period newest first — per filing: revenue, expenses, assets, liabilities, net assets, revenue breakdown (contributions, program service, investment income), and the source PDF link
+- Optional inclusive `from_year` / `to_year` bounds apply to both extracted and PDF-only histories. Totals remain unfiltered; an empty selected interval does not mean the organization has no history
 - Financial fields follow each return's form type. For 990-PF, investment income is savings interest plus dividends and securities interest (Part I column (a), lines 3–4); both components must be extracted. It excludes capital gains, rents, and net investment income
 - 990-PF filings include `grants_paid`, `distributable_amount`, `fair_market_value_assets`, and `net_investment_income`. The distributable amount is a payout requirement, not actual payments or a compliance measure
 - `program_expense_ratio` is always `null` — ProPublica returns no Form 990 Part IX program-service expense total, so the program/management/fundraising split is only in the source PDF
-- Executive compensation summary with field-name transparency and a note pointing to Schedule J for per-officer detail
-- `filings_pdf_only` lists older filings with a PDF but no extracted data
+- Form 990 includes other salaries and wages, payroll taxes, professional fundraising fees, and fundraising event gross, direct expenses, and net income. For 990-EZ, event gross is separate from combined gaming/fundraising expenses and net income; the combined figures cannot establish event-only results
+- Executive compensation includes the source field for 990 and 990-PF. The 990-EZ extract has no compensation source: amount and field name are null, with guidance to Part IV of the PDF
+- `filings_pdf_only` retains fiscal years and tax periods for returns without extracted data, including returns newer than the financial snapshots
 - An EIN that resolves to a real org with no 990 on record returns an empty `filings` array plus a `notice`, not an error
 - Data lags 1–2 years — always cite `tax_prd_yr` (fiscal year) when presenting figures
 
@@ -92,6 +96,8 @@ Agent-friendly output:
 - Filing-year clarity — `tax_prd_yr` prominently labeled as fiscal year with explicit lag caveat in every financial response
 - Null values are rendered, not dropped — the formatted text names why a value is absent (never recorded by the IRS, not extracted from the filing, not carried by that form type), and `structuredContent` keeps an explicit `null` rather than omitting the key
 - Field-name transparency on compensation — `field_name` and `form_type` exposed so agents know exactly which IRS field was read
+
+The published [nonprofit-explorer-guide](./skills/nonprofit-explorer-guide/SKILL.md) covers diligence, financial comparisons, and when to inspect the source return. It is included in npm, Docker, and desktop bundles and served through MCP skill resources.
 
 ## Getting started
 
@@ -267,6 +273,7 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 | `src/index.ts` | `createApp()` entry point — registers tools and inits the service. |
 | `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). Three tools for search and financial data. |
 | `src/services/nonprofit-explorer` | ProPublica Nonprofit Explorer API client and domain types. |
+| `skills/` | Published agent guidance for diligence and financial interpretation. |
 | `tests/` | Unit and integration tests mirroring `src/`. |
 
 ## Development guide

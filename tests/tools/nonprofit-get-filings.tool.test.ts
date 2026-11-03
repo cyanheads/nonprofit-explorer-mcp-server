@@ -4,7 +4,7 @@
  */
 
 import { JsonRpcErrorCode, notFound, serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nonprofitGetFilings } from '@/mcp-server/tools/definitions/nonprofit-get-filings.tool.js';
 import * as svcModule from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
@@ -28,6 +28,14 @@ const makeFiling = (overrides: Partial<Filing> = {}): Filing => ({
   contributions_and_grants: 2_500_000,
   program_service_revenue: 400_000,
   investment_income: 100_000,
+  other_salaries_and_wages: null,
+  payroll_taxes: null,
+  professional_fundraising_fees: null,
+  fundraising_events_gross: null,
+  fundraising_events_direct_expenses: null,
+  fundraising_events_net: null,
+  gaming_and_fundraising_direct_expenses: null,
+  gaming_and_fundraising_net: null,
   grants_paid: null,
   distributable_amount: null,
   fair_market_value_assets: null,
@@ -45,6 +53,8 @@ const makeFiling = (overrides: Partial<Filing> = {}): Filing => ({
 const makeFormatOutput = (overrides: Partial<FilingsOutput> = {}): FilingsOutput => ({
   ein: 530196605,
   name: 'The Red Cross',
+  from_year: null,
+  to_year: null,
   filings: [makeFiling()],
   filings_pdf_only: [],
   total_filings_with_data: 1,
@@ -138,6 +148,251 @@ const mockSingleFiling = (filing: object) => {
 };
 
 describe('nonprofitGetFilings', () => {
+  it('preserves zero supported-form compensation and missing amounts', async () => {
+    mockSingleFiling({ formtype: 0, compnsatncurrofcr: 0 });
+    const result = await nonprofitGetFilings.handler(
+      { ein: 530196605 },
+      createMockContext({ errors: nonprofitGetFilings.errors }),
+    );
+    expect(result.filings[0]!.executive_compensation.amount).toBe(0);
+    expect(result.filings[0]!.total_revenue).toBeNull();
+    expect(renderText(nonprofitGetFilings.format!(result))).toContain(
+      '**Total (compnsatncurrofcr):** $0',
+    );
+  });
+
+  it('orders full periods and retains same-period PDF entries without calling them older', async () => {
+    vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+      getOrganization: vi.fn().mockResolvedValue({
+        organization: { ein: 530196605 },
+        filings_with_data: [
+          { tax_prd_yr: 2023, tax_prd: 202303 },
+          { tax_prd_yr: 2023, tax_prd: 202312 },
+        ],
+        filings_without_data: [
+          { tax_prd_yr: 2024, tax_prd: 202403 },
+          { tax_prd_yr: 2024, tax_prd: 202412 },
+          { tax_prd_yr: 2024, tax_prd: 202412 },
+        ],
+      }),
+    } as unknown as svcModule.NonprofitExplorerService);
+    const result = await nonprofitGetFilings.handler(
+      { ein: 530196605 },
+      createMockContext({ errors: nonprofitGetFilings.errors }),
+    );
+    expect(result.filings.map((f) => f.tax_prd)).toEqual([202312, 202303]);
+    expect(result.filings_pdf_only.map((f) => f.tax_prd)).toEqual([202412, 202412, 202403]);
+    const text = renderText(nonprofitGetFilings.format!(result));
+    expect(text).toContain('period: 202412');
+    expect(text).not.toContain('Older Filings');
+  });
+
+  it('marks EZ compensation unextracted even if a misleading field is present', async () => {
+    mockSingleFiling({ formtype: 1, compnsatncurrofcr: 123 });
+    const result = await nonprofitGetFilings.handler(
+      { ein: 530196605 },
+      createMockContext({ errors: nonprofitGetFilings.errors }),
+    );
+    expect(result.filings[0]!.executive_compensation).toMatchObject({
+      amount: null,
+      field_name: null,
+    });
+    const text = renderText(nonprofitGetFilings.format!(result));
+    expect(text).toContain('Part IV');
+    expect(text).toContain('Not extracted');
+    expect(text).not.toContain('Schedule J');
+  });
+
+  it('contextualizes a church with empty history without suggesting 990-N on both surfaces', async () => {
+    vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+      getOrganization: vi.fn().mockResolvedValue({
+        organization: {
+          ein: 910597007,
+          name: 'Holy Family',
+          filing_requirement_code: 6,
+          pf_filing_requirement_code: 0,
+          affiliation_code: 9,
+          exemption_number: 928,
+        },
+        filings_with_data: [],
+        filings_without_data: [],
+      }),
+    } as unknown as svcModule.NonprofitExplorerService);
+    const result = await runToolContract(nonprofitGetFilings, { ein: 910597007 });
+    expect(result.isError).not.toBe(true);
+    expect(JSON.stringify(result.structuredContent)).toContain('church');
+    expect(JSON.stringify(result.content)).toContain('church');
+    expect(JSON.stringify(result)).not.toMatch(/990-?N/);
+  });
+
+  it.each([
+    [{}, [2024, 2023, 2023, 2022], [2024, 2023, 2022]],
+    [{ from_year: 2023 }, [2024, 2023, 2023], [2024, 2023]],
+    [{ to_year: 2023 }, [2023, 2023, 2022], [2023, 2022]],
+    [{ from_year: 2023, to_year: 2023 }, [2023, 2023], [2023]],
+    [{ from_year: 2030 }, [], []],
+  ])(
+    'selects fiscal years with bounds %j while retaining unfiltered totals',
+    async (bounds, extractedYears, pdfYears) => {
+      vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+        getOrganization: vi.fn().mockResolvedValue({
+          organization: { ein: 530196605 },
+          filings_with_data: [2022, 2023, 2023, 2024].map((year, i) => ({
+            tax_prd_yr: year,
+            tax_prd: year * 100 + i + 1,
+            formtype: i % 3,
+          })),
+          filings_without_data: [2022, 2023, 2024].map((year) => ({
+            tax_prd_yr: year,
+            tax_prd: year * 100 + 12,
+          })),
+        }),
+      } as unknown as svcModule.NonprofitExplorerService);
+      const result = await runToolContract(nonprofitGetFilings, { ein: 530196605, ...bounds });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        from_year: 'from_year' in bounds ? bounds.from_year : null,
+        to_year: 'to_year' in bounds ? bounds.to_year : null,
+        total_filings_with_data: 4,
+        total_filings_pdf_only: 3,
+      });
+      const data = result.structuredContent as unknown as FilingsOutput;
+      expect(data.filings.map((f) => f.tax_prd_yr)).toEqual(extractedYears);
+      expect(data.filings_pdf_only.map((f) => f.tax_prd_yr)).toEqual(pdfYears);
+      const text = JSON.stringify(result.content);
+      expect(text).toContain('from_year=');
+      expect(text).toContain('to_year=');
+      expect(text).toContain('**Unfiltered filings with data:** 4');
+      expect(text).toContain('**Unfiltered PDF-only filings:** 3');
+      if (extractedYears.length === 0) {
+        expect(text).toContain('selected fiscal-year window');
+        expect(text).not.toContain('no Form 990 for it');
+      }
+    },
+  );
+
+  it.each([{ from_year: 2023.5 }, { to_year: 'invalid' }])(
+    'rejects invalid year input %j',
+    async (bounds) => {
+      const result = await runToolContract(nonprofitGetFilings, {
+        ein: 530196605,
+        ...bounds,
+      } as never);
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.structuredContent)).toContain('-32602');
+      expect(JSON.stringify(result.content)).toContain('year');
+    },
+  );
+
+  it('maps all eight financial fields per form with zero, negative and absent values on both surfaces', async () => {
+    vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+      getOrganization: vi.fn().mockResolvedValue({
+        organization: { ein: 530196605 },
+        filings_without_data: [],
+        filings_with_data: [0, 1, 2].map((formtype, i) => ({
+          tax_prd_yr: 2024 - i,
+          tax_prd: (2024 - i) * 100 + 12,
+          formtype,
+          othrsalwages: 10,
+          payrolltx: 0,
+          profndraising: 452216,
+          grsincfndrsng: 3103039,
+          grsrevnuefndrsng: 0,
+          lessdirfndrsng: 3952668,
+          netincfndrsng: -849629,
+          direxpns: 0,
+        })),
+      }),
+    } as unknown as svcModule.NonprofitExplorerService);
+    const result = await runToolContract(nonprofitGetFilings, { ein: 530196605 });
+    expect(result.isError).not.toBe(true);
+    const data = result.structuredContent as unknown as FilingsOutput;
+    const keys = [
+      'other_salaries_and_wages',
+      'payroll_taxes',
+      'professional_fundraising_fees',
+      'fundraising_events_gross',
+      'fundraising_events_direct_expenses',
+      'fundraising_events_net',
+      'gaming_and_fundraising_direct_expenses',
+      'gaming_and_fundraising_net',
+    ] as const;
+    expect(data.filings.map((f) => keys.map((key) => f[key]))).toEqual([
+      [10, 0, 452216, 3103039, 3952668, -849629, null, null],
+      [null, null, null, 0, null, null, 0, -849629],
+      [null, null, null, null, null, null, null, null],
+    ]);
+    expect(data.filings.map((f) => f.program_expense_ratio)).toEqual([null, null, null]);
+    const text = JSON.stringify(result.content);
+    for (const label of [
+      'Other Salaries & Wages',
+      'Payroll Taxes',
+      'Professional Fundraising Fees',
+      'Fundraising Events Gross',
+      'Fundraising Events Direct Expenses',
+      'Fundraising Events Net',
+      'Gaming and Fundraising Direct Expenses',
+      'Gaming and Fundraising Net',
+    ])
+      expect(text).toContain(label);
+    expect(text).toContain('$-849,629');
+    expect(text).toContain('**Payroll Taxes:** $0');
+    expect(text).toContain('combine gaming and events');
+    expect(text).toContain('Not applicable for 990-PF');
+    mockSingleFiling({ formtype: 0 });
+    const sparse = await nonprofitGetFilings.handler(
+      { ein: 530196605 },
+      createMockContext({ errors: nonprofitGetFilings.errors }),
+    );
+    expect(keys.map((key) => sparse.filings[0]![key])).toEqual([
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+    expect(renderText(nonprofitGetFilings.format!(sparse))).toContain(
+      '**Payroll Taxes:** Not extracted',
+    );
+  });
+
+  it('renders invariant explanations once per form with per-filing null fields retained', async () => {
+    vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
+      getOrganization: vi.fn().mockResolvedValue({
+        organization: { ein: 530196605 },
+        filings_without_data: [],
+        filings_with_data: [0, 0, 1, 1, 2, 2].map((formtype, i) => ({
+          formtype,
+          tax_prd_yr: 2024 - i,
+          tax_prd: (2024 - i) * 100 + 12,
+        })),
+      }),
+    } as unknown as svcModule.NonprofitExplorerService);
+    const result = await nonprofitGetFilings.handler(
+      { ein: 530196605 },
+      createMockContext({ errors: nonprofitGetFilings.errors }),
+    );
+    const text = renderText(nonprofitGetFilings.format!(result));
+    expect(text.match(/## Notes applying to every /g)).toHaveLength(3);
+    expect(text.match(/Read Part IV/g)).toHaveLength(1);
+    expect(text.match(/Both components must be extracted/g)).toHaveLength(1);
+    expect(text.match(/### Program Expense Ratio/g)).toHaveLength(6);
+    expect(text).toContain(
+      'Grants Paid; Distributable Amount; Fair-Market-Value Assets; Net Investment Income:** Not applicable for 990-EZ',
+    );
+    const ezNotes = text.slice(
+      text.indexOf('## Notes applying to every 990-EZ'),
+      text.indexOf('## Notes applying to every 990-PF'),
+    );
+    const pfNotes = text.slice(text.indexOf('## Notes applying to every 990-PF'));
+    for (const notes of [ezNotes, pfNotes]) {
+      expect(notes).toContain('does not contain the Form 990 Part IX functional allocation');
+      expect(notes).not.toContain('Read Part IX');
+    }
+  });
   beforeEach(() => {
     vi.spyOn(svcModule, 'getNonprofitExplorerService').mockReturnValue({
       search: vi.fn(),
@@ -236,7 +491,7 @@ describe('nonprofitGetFilings', () => {
    */
   it.each([
     { formtype: 0, form_type: '990', field_name: 'compnsatncurrofcr', amount: 250_000 },
-    { formtype: 1, form_type: '990-EZ', field_name: 'compnsatncurrofcr', amount: 250_000 },
+    { formtype: 1, form_type: '990-EZ', field_name: null, amount: null },
     { formtype: 2, form_type: '990-PF', field_name: 'compofficers', amount: 500_000 },
     { formtype: undefined, form_type: '990', field_name: 'compnsatncurrofcr', amount: 250_000 },
     { formtype: 99, form_type: '990', field_name: 'compnsatncurrofcr', amount: 250_000 },
@@ -366,7 +621,8 @@ describe('nonprofitGetFilings', () => {
     expect(result.name).toBe('The Red Cross');
 
     const notice = String(getEnrichment(ctx).notice);
-    expect(notice).toContain('990N');
+    expect(notice).toContain('not on record');
+    expect(notice).not.toMatch(/990-?N/);
     expect(notice).toContain('The Red Cross');
   });
 
@@ -491,7 +747,6 @@ describe('nonprofitGetFilings', () => {
             totrevenue: 180_000,
             totfuncexpns: 160_000,
             totcntrbs: 150_000,
-            compnsatncurrofcr: 40_000,
           },
           {
             tax_prd: 202212,
@@ -515,11 +770,13 @@ describe('nonprofitGetFilings', () => {
     expect(result.filings.map((f) => f.tax_prd_yr)).toEqual([2022, 2021, 2020]);
     expect(result.filings.map((f) => [f.form_type, f.executive_compensation.field_name])).toEqual([
       ['990', 'compnsatncurrofcr'],
-      ['990-EZ', 'compnsatncurrofcr'],
+      ['990-EZ', null],
       ['990-PF', 'compofficers'],
     ]);
     expect(result.filings.map((f) => f.executive_compensation.amount)).toEqual([
-      250_000, 40_000, 500_000,
+      250_000,
+      null,
+      500_000,
     ]);
     // The 990-PF year omits contributions; each other year uses its form's field.
     expect(result.filings.map((f) => f.contributions_and_grants)).toEqual([
@@ -590,6 +847,7 @@ describe('nonprofitGetFilings', () => {
     expect(nonprofitGetFilings.output.safeParse(result).success).toBe(true);
     expect(result.filings_pdf_only[0]).toEqual({
       tax_prd_yr: 2009,
+      tax_prd: null,
       form_type_str: '',
       pdf_url: null,
     });
@@ -690,7 +948,7 @@ describe('nonprofitGetFilings', () => {
    */
   it.each([
     { formtype: 0, form_type: '990', field_name: 'compnsatncurrofcr', amount: 250_000 },
-    { formtype: 1, form_type: '990-EZ', field_name: 'compnsatncurrofcr', amount: 250_000 },
+    { formtype: 1, form_type: '990-EZ', field_name: null, amount: null },
     { formtype: 2, form_type: '990-PF', field_name: 'compofficers', amount: 500_000 },
   ])(
     'renders executive compensation on both surfaces for a $form_type filing',
@@ -709,7 +967,11 @@ describe('nonprofitGetFilings', () => {
 
       const text = renderText(nonprofitGetFilings.format!(result));
       expect(text).toContain(`### Executive Compensation (${form_type})`);
-      expect(text).toContain(`**Total (${field_name}):** $${amount.toLocaleString()}`);
+      expect(text).toContain(
+        field_name == null
+          ? '**Total (source field: null):** Not extracted'
+          : `**Total (${field_name}):** $${amount!.toLocaleString()}`,
+      );
       // No form type renders the block as inapplicable — the field always exists.
       expect(text).not.toContain('no compensation field exists');
     },
@@ -759,7 +1021,7 @@ describe('nonprofitGetFilings', () => {
     );
 
     expect(text).toContain('The Red Cross');
-    expect(text).toContain('**Filings with data:** 0');
+    expect(text).toContain('**Unfiltered filings with data:** 0');
     expect(text).toContain('No Form 990 with extracted financial data on record');
     expect(text).not.toContain('## FY');
   });

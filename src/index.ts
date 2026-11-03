@@ -16,6 +16,7 @@ await createApp({
   tools: [nonprofitSearchOrganizations, nonprofitGetOrganization, nonprofitGetFilings],
   resources: [],
   prompts: [],
+  skills: 'skills',
   /**
    * The tool list is fixed at build time — three unconditional registrations, no
    * feature gate, no auth scope, nothing that emits `toolsChanged` — so every
@@ -35,5 +36,5 @@ await createApp({
     initNonprofitExplorerService(core.config, core.storage);
   },
   instructions:
-    'ProPublica Nonprofit Explorer — keyless read-only access to IRS Form 990 data on 1.8M+ tax-exempt organizations.\n- Start with nonprofit_search_organizations to find an org by name and get its EIN\n- Use nonprofit_get_organization for the full profile and latest financial snapshot\n- Use nonprofit_get_filings for year-by-year 990 data, executive comp, and source PDF links\n- Data lags 1–2 years; always cite the fiscal year (tax_prd_yr) when presenting financial figures',
+    'ProPublica Nonprofit Explorer provides keyless read-only access to IRS Form 990 data on 1.8M+ tax-exempt organizations. Resolve names to EINs with nonprofit_search_organizations; use nonprofit_get_organization for the profile, latest extracted financial snapshot, and newest-return metadata, then nonprofit_get_filings for financial history and source PDF links. The newest return may be PDF-only and newer than the extracted snapshot. Filings can be selected with inclusive fiscal-year bounds; omitted bounds return the full history. Data typically lags 1–2 years: cite tax_prd_yr and distinguish the tax period from the filing date.',
 });
