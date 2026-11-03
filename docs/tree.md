@@ -1,6 +1,6 @@
 # nonprofit-explorer-mcp-server - Directory Structure
 
-Generated on: 2026-10-22 03:35:15
+Generated on: 2026-11-03 07:58:29
 
 ```text
 nonprofit-explorer-mcp-server/
@@ -38,6 +38,8 @@ nonprofit-explorer-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -135,6 +137,9 @@ nonprofit-explorer-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── nonprofit-explorer-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── mcp-server/
 │   │   ├── prompts/
@@ -148,14 +153,19 @@ nonprofit-explorer-mcp-server/
 │   │           └── nonprofit-search-organizations.tool.ts
 │   ├── services/
 │   │   └── nonprofit-explorer/
+│   │       ├── filing-history.ts
+│   │       ├── filing-requirements.ts
 │   │       ├── nonprofit-explorer-service.ts
 │   │       └── types.ts
 │   └── index.ts
 ├── tests/
 │   ├── prompts/
 │   ├── resources/
+│   ├── scripts/
+│   │   └── bundle-agent-docs.test.ts
 │   ├── services/
 │   │   └── nonprofit-explorer/
+│   │       ├── filing-requirements.test.ts
 │   │       └── nonprofit-explorer-service.test.ts
 │   └── tools/
 │       ├── nonprofit-get-filings.tool.test.ts
@@ -179,7 +189,9 @@ nonprofit-explorer-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json
