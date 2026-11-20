@@ -1,5 +1,5 @@
 /**
- * @fileoverview Vitest config for the consumer server. Uses Vitest 4 `projects`
+ * @fileoverview Vitest config for the consumer server. Uses Vitest `projects`
  * so you can split suites (unit/smoke/integration/fuzz) and run each with
  * `--project <name>` as the surface grows. Extends the framework's base config
  * for shared `resolve`, `ssr`, and coverage settings.
@@ -7,6 +7,7 @@
  * @module vitest.config
  */
 
+import { versions } from 'node:process';
 import coreConfig from '@cyanheads/mcp-ts-core/vitest.config';
 import { defineConfig, mergeConfig } from 'vitest/config';
 
@@ -17,6 +18,8 @@ export default mergeConfig(
   defineConfig({
     resolve: { alias },
     test: {
+      // Vitest 5.1's fork watchdog requires IPC channel unref(), which Bun lacks.
+      pool: versions.bun ? 'threads' : 'forks',
       projects: [
         {
           extends: true,

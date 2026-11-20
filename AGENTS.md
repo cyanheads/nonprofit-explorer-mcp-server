@@ -2,8 +2,8 @@
 
 **Server:** nonprofit-explorer-mcp-server
 **Version:** 0.3.0
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.18`
-**Engines:** Bun ≥1.4.0, Node ≥24.0.0
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.22`
+**Engines:** Bun ≥1.4.4, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.4.0
 **Zod:** ^4.6.7
 
@@ -259,9 +259,9 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 ## Bundling
 
-Keep root-anchored exclusions in `.mcpbignore` for source, scripts, tests, docs, caches, logs, agent docs, plugin manifests, and local configuration. Root `skills/` ships deliberately. The cleaner also removes node-gyp generator output and framework build-only files. Its agent-doc selector must match only package-root documentation directories: SDK runtime paths such as `dist/ext/skills/` remain executable code. Keep that local selector fix in `scripts/clean-mcpb.ts` and `scripts/lint-packaging.ts` until the framework supplies it.
+Keep root-anchored exclusions in `.mcpbignore` for source, scripts, tests, docs, caches, logs, agent docs, plugin manifests, and local configuration. Root `skills/` ships deliberately.
 
-`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips two classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `SKILL.md`) and platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
+`bun run bundle` packs a stdio extension for Claude Desktop. After packing, `scripts/clean-mcpb.ts` prunes dev dependencies and removes installed packages' root agent docs, nested `SKILL.md` files, platform-specific native packages, node-gyp build output, and framework build-only files. The framework selector retains runtime paths such as the SDK's `dist/ext/skills/`. `bun run lint:packaging` checks the resulting bundle.
 
 **Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match, that every `user_config` option is wired into `mcp_config.env` as `"X": "${user_config.X}"` (the host substitutes nothing else — `"${X}"` reaches the server as that literal string), and that an optional string option carries `"default": ""`.
 

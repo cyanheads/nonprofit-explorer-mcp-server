@@ -36,4 +36,23 @@ describe.each(['clean-mcpb', 'lint-packaging'])('%s agent-doc selector', (script
       expect(selector.test(entry), entry).toBe(false);
     }
   });
+
+  it('strips dependency agent instructions and nested skill documents', async () => {
+    const module = await import(scriptUrl.href);
+    const selector = z.instanceof(RegExp).parse(module.AGENT_DOC_ENTRY);
+    for (const entry of [
+      'node_modules/example/AGENTS.md',
+      'node_modules/outer/node_modules/@scope/example/CLAUDE.md',
+      'node_modules/@scope/example/dist/docs/SKILL.md',
+    ]) {
+      expect(selector.test(entry), entry).toBe(true);
+    }
+  });
+
+  it('retains scoped packages named skills and excludes empty listings', async () => {
+    const module = await import(scriptUrl.href);
+    const selector = z.instanceof(RegExp).parse(module.AGENT_DOC_ENTRY);
+    expect(selector.test('node_modules/@scope/skills/dist/index.js')).toBe(false);
+    expect(selector.test('')).toBe(false);
+  });
 });
