@@ -9,6 +9,7 @@ import { escapeMarkdownInline, markdownLink } from '@cyanheads/mcp-ts-core/utils
 import { compareTaxPeriods } from '@/services/nonprofit-explorer/filing-history.js';
 import { emptyHistoryNotice } from '@/services/nonprofit-explorer/filing-requirements.js';
 import {
+  formatEin,
   getNonprofitExplorerService,
   normalizeEin,
 } from '@/services/nonprofit-explorer/nonprofit-explorer-service.js';
@@ -16,6 +17,38 @@ import type { RawFiling } from '@/services/nonprofit-explorer/types.js';
 
 const USD = (n: number) => `$${n.toLocaleString()}`;
 const PCT = (n: number) => `${(n * 100).toFixed(1)}%`;
+
+const fiscalYearError = 'Expected a four-digit integer fiscal year (1000–9999).';
+const fiscalYear = z
+  .number(fiscalYearError)
+  .int(fiscalYearError)
+  .min(1000, fiscalYearError)
+  .max(9999, fiscalYearError);
+
+const yearSpan = z.object({
+  earliest: z.number().int().describe('Earliest known fiscal year in the complete collection.'),
+  latest: z.number().int().describe('Latest known fiscal year in the complete collection.'),
+});
+type YearSpan = z.infer<typeof yearSpan>;
+
+function filingYearSpan(filings: readonly { tax_prd_yr?: number }[]): YearSpan | null {
+  let span: YearSpan | null = null;
+  for (const { tax_prd_yr: year } of filings) {
+    if (year == null || !Number.isInteger(year) || year < 1000 || year > 9999) continue;
+    if (span === null) {
+      span = { earliest: year, latest: year };
+    } else {
+      span.earliest = Math.min(span.earliest, year);
+      span.latest = Math.max(span.latest, year);
+    }
+  }
+  return span;
+}
+
+function renderYearSpan(span: YearSpan | null, count: number): string {
+  if (span === null) return count === 0 ? 'No filings' : 'No known fiscal years';
+  return span.earliest === span.latest ? String(span.earliest) : `${span.earliest}–${span.latest}`;
+}
 
 /** A figure ProPublica did not extract from this filing. */
 const NOT_EXTRACTED = 'Not extracted';
@@ -71,14 +104,14 @@ function buildExecComp(filing: RawFiling): {
     amount: filing.compnsatncurrofcr ?? null,
     field_name: 'compnsatncurrofcr',
     form_type: formTypeLabel(filing.formtype),
-    note: '990: total compensation of current officers, directors, trustees, and key employees. Per-officer breakdown requires Schedule J in the source PDF.',
+    note: '990: total compensation of current officers, directors, trustees, and key employees. Read Part VII and, when applicable, Schedule J of the source return for per-officer compensation.',
   };
 }
 
 export const nonprofitGetFilings = tool('nonprofit_get_filings', {
   title: 'Get Nonprofit Filings',
   description:
-    'Form 990 history by EIN with extracted financials, form-specific compensation, and PDF-only returns. Optional inclusive from_year/to_year bounds select fiscal years across both histories; omitted bounds return full history. Unfiltered totals remain available. Records are sorted by full tax period without amendment precedence. Empty dataset history succeeds with BMF context; an empty selected window does not imply no history. Data lags 1–2 years; always cite tax_prd_yr. Data from ProPublica Nonprofit Explorer and IRS Form 990 filings.',
+    'Form 990 history by EIN with extracted financials, form-specific compensation, and PDF-only returns. Optional inclusive four-digit from_year/to_year bounds select fiscal years across both histories; omitted bounds return full history. Counts and fiscal-year spans cover the full history, including when a selected window is empty. Records are sorted by full tax period without amendment precedence. Empty dataset history succeeds with BMF context. For the newest available ProPublica HTML viewer, call nonprofit_get_organization and verify the viewer’s reporting period. Data lags 1–2 years; always cite tax_prd_yr. Data from ProPublica Nonprofit Explorer and IRS Form 990 filings.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
@@ -99,20 +132,21 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
       .describe(
         'Employer Identification Number. Use nonprofit_search_organizations to resolve an org name to its EIN.',
       ),
-    from_year: z
-      .number()
-      .int()
+    from_year: fiscalYear
       .optional()
-      .describe('Inclusive minimum fiscal year (tax_prd_yr). Omit for no lower bound.'),
-    to_year: z
-      .number()
-      .int()
+      .describe(
+        'Inclusive minimum fiscal year (tax_prd_yr), a four-digit integer. Omit for no lower bound.',
+      ),
+    to_year: fiscalYear
       .optional()
-      .describe('Inclusive maximum fiscal year (tax_prd_yr). Omit for no upper bound.'),
+      .describe(
+        'Inclusive maximum fiscal year (tax_prd_yr), a four-digit integer. Omit for no upper bound.',
+      ),
   }),
 
   output: z.object({
     ein: z.number().describe('Employer Identification Number as integer.'),
+    strein: z.string().describe('EIN in "XX-XXXXXXX" format.'),
     name: z.string().describe('Legal org name per IRS.'),
     from_year: z
       .number()
@@ -307,7 +341,7 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
               })
               .nullable()
               .describe(
-                'Always null against the current data source. ProPublica returns no Form 990 Part IX column (B) program-service expense total, and the functional allocation across program, management, and fundraising cannot be reconstructed from the fields it does return. Read Part IX of the filing at pdf_url for the split.',
+                'Always null against the current data source. ProPublica returns no Form 990 Part IX column (B) program-service expense total, and the functional allocation across program, management, and fundraising cannot be reconstructed from the fields it does return. Read Part IX of the source return for that period. Use its PDF or the newest rendered e-file from nonprofit_get_organization after verifying its period.',
               ),
             executive_compensation: z
               .object({
@@ -367,6 +401,16 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
     total_filings_pdf_only: z
       .number()
       .describe('Unfiltered count of PDF-only filings (no extracted data).'),
+    years_with_data: yearSpan
+      .nullable()
+      .describe(
+        'Unfiltered fiscal-year endpoints for extracted filings. Years may have gaps. Null when no years are known.',
+      ),
+    years_pdf_only: yearSpan
+      .nullable()
+      .describe(
+        'Unfiltered fiscal-year endpoints for PDF-only filings. Years may have gaps. Null when no years are known.',
+      ),
     data_source: z.string().describe('ProPublica + IRS attribution text.'),
     propublica_url: z.string().describe('ProPublica Nonprofit Explorer URL for this org.'),
   }),
@@ -376,7 +420,7 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
       .string()
       .optional()
       .describe(
-        'Present only when the complete dataset history is empty, with BMF context and no inferred cause. A selected window can be empty while unfiltered totals show existing history.',
+        'For an empty history, gives BMF context without inferring a cause. For a selected window with no returns, gives available fiscal-year coverage for both collections.',
       ),
   },
 
@@ -442,10 +486,8 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
     const org = raw.organization!;
     const filingsWithData = raw.filings_with_data ?? [];
     const filingsWithoutData = raw.filings_without_data ?? [];
-
-    if (filingsWithData.length === 0 && filingsWithoutData.length === 0) {
-      ctx.enrich.notice(emptyHistoryNotice(org, ein));
-    }
+    const yearsWithData = filingYearSpan(filingsWithData);
+    const yearsPdfOnly = filingYearSpan(filingsWithoutData);
 
     const inWindow = (f: { tax_prd_yr?: number }) =>
       (input.from_year == null || (f.tax_prd_yr != null && f.tax_prd_yr >= input.from_year)) &&
@@ -520,8 +562,17 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
 
     const einNum = org.ein ?? ein;
 
+    if (filingsWithData.length === 0 && filingsWithoutData.length === 0) {
+      ctx.enrich.notice(emptyHistoryNotice(org, ein));
+    } else if (mappedFilings.length === 0 && mappedPdfOnly.length === 0) {
+      ctx.enrich.notice(
+        `No filings in the selected fiscal-year window. Extracted fiscal-year span: ${renderYearSpan(yearsWithData, filingsWithData.length)}. PDF-only fiscal-year span: ${renderYearSpan(yearsPdfOnly, filingsWithoutData.length)}.`,
+      );
+    }
+
     return {
       ein: einNum,
+      strein: org.strein ?? formatEin(einNum),
       name: org.name ?? '',
       from_year: input.from_year ?? null,
       to_year: input.to_year ?? null,
@@ -529,6 +580,8 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
       filings_pdf_only: mappedPdfOnly,
       total_filings_with_data: filingsWithData.length,
       total_filings_pdf_only: filingsWithoutData.length,
+      years_with_data: yearsWithData,
+      years_pdf_only: yearsPdfOnly,
       data_source: raw.data_source ?? 'ProPublica Nonprofit Explorer, IRS Form 990 data.',
       propublica_url: `https://projects.propublica.org/nonprofits/organizations/${einNum}`,
     };
@@ -538,10 +591,13 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
     const lines: string[] = [];
 
     lines.push(`# ${escapeMarkdownInline(result.name)} — Form 990 Filings`);
-    lines.push(`**EIN:** ${result.ein}`);
+    lines.push(`**EIN:** ${escapeMarkdownInline(result.strein)} (${result.ein})`);
     lines.push(
       `**Unfiltered filings with data:** ${result.total_filings_with_data} | ` +
         `**Unfiltered PDF-only filings:** ${result.total_filings_pdf_only}`,
+    );
+    lines.push(
+      `**Extracted fiscal-year span:** ${renderYearSpan(result.years_with_data, result.total_filings_with_data)} | **PDF-only fiscal-year span:** ${renderYearSpan(result.years_pdf_only, result.total_filings_pdf_only)}`,
     );
     lines.push(`**Profile:** ${markdownLink(result.propublica_url, result.propublica_url)}`);
     lines.push(
@@ -551,14 +607,17 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
     lines.push(
       '> ⚠️ Data lags 1–2 years. FY shown is the fiscal year, not the current year. Always cite the year.',
     );
+    lines.push(
+      'For the newest ProPublica HTML viewer, call nonprofit_get_organization and verify its reporting period before using it. Use each return’s PDF for its own period.',
+    );
 
     if (result.filings.length === 0) {
       lines.push('');
-      lines.push(
-        result.from_year != null || result.to_year != null
-          ? '*No extracted filings in the selected fiscal-year window; unfiltered totals above describe the complete history.*'
-          : '*No Form 990 with extracted financial data on record for this organization.*',
-      );
+      if (result.total_filings_with_data === 0) {
+        lines.push('*No Form 990 with extracted financial data on record for this organization.*');
+      } else if (result.filings_pdf_only.length > 0) {
+        lines.push('*No extracted filings in the selected fiscal-year window.*');
+      }
     }
 
     for (const f of result.filings) {
@@ -665,7 +724,7 @@ export const nonprofitGetFilings = tool('nonprofit_get_filings', {
       lines.push(`## Notes applying to every ${form} extracted filing above`);
       lines.push(
         form === '990'
-          ? 'Program Expense Ratio: Not derivable from this data source — ProPublica returns no Form 990 Part IX program-service expense total. Read Part IX of the filing PDF for the program, management, and fundraising split.'
+          ? 'Program Expense Ratio: Not derivable from this data source — ProPublica returns no Form 990 Part IX program-service expense total. Read Part IX of the source return for the relevant period to find the program, management, and fundraising split.'
           : `Program Expense Ratio: Not derivable from this data source — ${form} does not contain the Form 990 Part IX functional allocation across program, management, and fundraising.`,
       );
       if (form === '990-PF') {
