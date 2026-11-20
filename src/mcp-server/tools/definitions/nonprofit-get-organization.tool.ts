@@ -95,7 +95,7 @@ function decodeIrsCode(
 export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
   title: 'Get Nonprofit Organization',
   description:
-    'Full profile for a tax-exempt org by EIN: legal identity, IRS classification and BMF filing requirements, latest extracted financial snapshot, and latest return metadata across extracted and PDF-only histories. Use nonprofit_search_organizations first to resolve a name to an EIN. latest_filing is the latest extracted snapshot; latest_return may be newer. Data lags 1–2 years; always cite the fiscal year. Data from ProPublica Nonprofit Explorer and IRS Form 990 filings.',
+    'Full profile for a tax-exempt org by EIN: legal identity, IRS classification and BMF filing requirements, latest extracted financial snapshot, newest recorded return, and newest rendered e-file link. The recorded return and rendered e-file come from separate sources, which may cover different periods. Use nonprofit_search_organizations first to resolve a name to an EIN. Data from ProPublica Nonprofit Explorer and IRS Form 990 filings.',
   annotations: { readOnlyHint: true, idempotentHint: true },
 
   input: z.object({
@@ -148,19 +148,27 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     ruling_date: z
       .string()
       .nullable()
-      .describe('ISO date of IRS recognition (e.g., "1946-07"). Null when not on record.'),
+      .describe(
+        'Month when the IRS recognized the exemption, returned as YYYY-MM-01 (e.g., "1946-07-01"). The day is a placeholder. Null when not on record.',
+      ),
     asset_amount: z
       .number()
       .nullable()
-      .describe('Most recent IRS BMF total assets in USD. Null when not on record.'),
+      .describe(
+        'IRS BMF end-of-year book assets in USD for bmf_tax_period when known. Null when not on record.',
+      ),
     income_amount: z
       .number()
       .nullable()
-      .describe('Most recent IRS BMF total income in USD. Null when not on record.'),
+      .describe(
+        'IRS BMF computed gross receipts (INCOME_AMT) in USD for bmf_tax_period when known. The IRS adds specified costs back to reported revenue, using form-specific calculations for 990, 990-EZ, and 990-PF. Null when not on record.',
+      ),
     revenue_amount: z
       .number()
       .nullable()
-      .describe('Most recent IRS BMF total revenue in USD. Null when not on record.'),
+      .describe(
+        'IRS BMF total revenue from Form 990 or 990-EZ in USD for bmf_tax_period when known. Null when not on record.',
+      ),
     deductible: z
       .string()
       .nullable()
@@ -183,7 +191,7 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       .string()
       .nullable()
       .describe(
-        'Tax period of the latest return recorded in the IRS Business Master File (e.g. "2025-06-01"). Often more recent than latest_filing.tax_prd_yr, which reflects the newest 990 ProPublica has extracted. Null when not on record.',
+        'Tax year ending month for the latest return recorded in the IRS Business Master File, returned as YYYY-MM-01 (e.g., "2025-06-01" means the year ending June 2025). The day is a placeholder. Null when not on record.',
       ),
     filing_requirement: z
       .string()
@@ -208,6 +216,18 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       .nullable()
       .describe(
         'IRS BMF group exemption number. Zero means none assigned; null means not on record. Does not prove inclusion in a group return.',
+      ),
+    latest_object_id: z
+      .string()
+      .nullable()
+      .describe(
+        'IRS e-file object ID of the newest rendered return reported by ProPublica for this organization. The API does not establish its period or associate it with either filing history or the BMF tax period. Null when unavailable.',
+      ),
+    latest_full_text_url: z
+      .string()
+      .nullable()
+      .describe(
+        'ProPublica HTML viewer for latest_object_id. The viewer identifies the period and links to rendered form and schedule sections. Verify its period before using it for a historical question. Null when unavailable.',
       ),
     latest_return: z
       .object({
@@ -370,6 +390,10 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
 
     const einNum = org.ein ?? ein;
     const strein = org.strein ?? formatEin(einNum);
+    const propublicaUrl = `https://projects.propublica.org/nonprofits/organizations/${einNum}`;
+    const objectId = org.latest_object_id;
+    const latestObjectId =
+      typeof objectId === 'string' && objectId.length > 0 && !/\D/.test(objectId) ? objectId : null;
 
     return {
       ein: einNum,
@@ -391,6 +415,8 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       foundation_type: decodeIrsCode(org.foundation_code, FOUNDATION_LABELS),
       bmf_tax_period: org.tax_period ?? null,
       ...filingRequirements(org),
+      latest_object_id: latestObjectId,
+      latest_full_text_url: latestObjectId ? `${propublicaUrl}/${latestObjectId}/full` : null,
       latest_return: newestReturn
         ? {
             tax_prd_yr: newestReturn.tax_prd_yr ?? null,
@@ -403,7 +429,7 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
       filing_count: filings.length,
       filing_count_pdf_only: pdfOnly.length,
       data_source: raw.data_source ?? 'ProPublica Nonprofit Explorer, IRS Form 990 data.',
-      propublica_url: `https://projects.propublica.org/nonprofits/organizations/${einNum}`,
+      propublica_url: propublicaUrl,
     };
   },
 
@@ -462,6 +488,10 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     lines.push(`**PDF-only filings:** ${result.filing_count_pdf_only}`);
     lines.push('');
     lines.push(`**Profile:** ${markdownLink(result.propublica_url, result.propublica_url)}`);
+    lines.push(`**Latest E-file Object ID:** ${result.latest_object_id ?? 'Not available'}`);
+    lines.push(
+      `**Latest Full-text Filing:** ${result.latest_full_text_url ? markdownLink('ProPublica HTML viewer', result.latest_full_text_url) : 'Not available'}`,
+    );
 
     if (result.latest_return) {
       const r = result.latest_return;
@@ -500,9 +530,12 @@ export const nonprofitGetOrganization = tool('nonprofit_get_organization', {
     }
 
     lines.push('');
-    lines.push('## IRS Business Master File Summary');
+    const bmfMonth = result.bmf_tax_period?.replace(/-01$/, '');
+    lines.push(
+      `## IRS Business Master File Summary (${escapeMarkdownInline(bmfMonth ?? 'period not on record')})`,
+    );
     lines.push(`**Total Assets (BMF):** ${money(result.asset_amount, NOT_ON_RECORD)}`);
-    lines.push(`**Total Income (BMF):** ${money(result.income_amount, NOT_ON_RECORD)}`);
+    lines.push(`**Computed Gross Receipts (BMF):** ${money(result.income_amount, NOT_ON_RECORD)}`);
     lines.push(`**Total Revenue (BMF):** ${money(result.revenue_amount, NOT_ON_RECORD)}`);
 
     lines.push('');

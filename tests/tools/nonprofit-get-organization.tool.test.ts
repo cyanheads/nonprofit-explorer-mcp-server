@@ -24,7 +24,7 @@ const makeFormatOutput = (overrides: Partial<OrgOutput> = {}): OrgOutput => ({
   zipcode: '20006',
   ntee_code: 'P20',
   subsection_code: 3,
-  ruling_date: '1946-07',
+  ruling_date: '1946-07-01',
   asset_amount: 5_000_000,
   income_amount: 3_000_000,
   revenue_amount: 3_000_000,
@@ -36,6 +36,8 @@ const makeFormatOutput = (overrides: Partial<OrgOutput> = {}): OrgOutput => ({
   pf_filing_requirement: null,
   affiliation: null,
   group_exemption_number: null,
+  latest_object_id: null,
+  latest_full_text_url: null,
   latest_return: null,
   latest_filing: {
     tax_prd_yr: 2022,
@@ -70,7 +72,7 @@ const makeRawOrgResponse = (overrides: object = {}) => ({
     zipcode: '20006',
     ntee_code: 'P20',
     subsection_code: 3,
-    ruling_date: '1946-07',
+    ruling_date: '1946-07-01',
     asset_amount: 5_000_000,
     income_amount: 3_000_000,
     revenue_amount: 3_000_000,
@@ -411,6 +413,80 @@ describe('nonprofitGetOrganization', () => {
     });
   });
 
+  it('keeps BMF amounts and dates independent of the filing history', async () => {
+    const payload = makeRawOrgResponse({
+      asset_amount: 0,
+      income_amount: -50,
+      revenue_amount: null,
+      ruling_date: '1938-12-01',
+    });
+    vi.mocked(svcModule.getNonprofitExplorerService().getOrganization).mockResolvedValue({
+      ...payload,
+      filings_without_data: [
+        { tax_prd: 202406, formtype: 0, pdf_url: 'https://example.com/2024.pdf' },
+      ],
+    });
+
+    const result = await runToolContract(nonprofitGetOrganization, { ein: 530196605 });
+    expect(result.structuredContent).toMatchObject({
+      asset_amount: 0,
+      income_amount: -50,
+      revenue_amount: null,
+      ruling_date: '1938-12-01',
+      bmf_tax_period: '2025-06-01',
+      latest_filing: { tax_prd_yr: 2022, pdf_url: 'https://example.com/990.pdf' },
+      latest_return: { tax_prd: 202406, pdf_url: 'https://example.com/2024.pdf' },
+    });
+  });
+
+  it('links the newest rendered e-file separately from the ordered filing history', async () => {
+    const objectId = '202640829349300109';
+    const viewer =
+      'https://projects.propublica.org/nonprofits/organizations/530196605/202640829349300109/full';
+    vi.mocked(svcModule.getNonprofitExplorerService().getOrganization).mockResolvedValue({
+      ...makeRawOrgResponse({ latest_object_id: objectId }),
+      filings_without_data: [
+        { tax_prd: 202406, formtype: 0, pdf_url: 'https://example.com/2024.pdf' },
+      ],
+    });
+
+    const result = await runToolContract(nonprofitGetOrganization, { ein: 530196605 });
+    expect(result.structuredContent).toMatchObject({
+      latest_object_id: objectId,
+      latest_full_text_url: viewer,
+      latest_return: { tax_prd: 202406, pdf_url: 'https://example.com/2024.pdf' },
+      latest_filing: { tax_prd_yr: 2022, pdf_url: 'https://example.com/990.pdf' },
+      bmf_tax_period: '2025-06-01',
+    });
+    const display = renderText(result.content);
+    expect(display).toContain(`](<${viewer}>)`);
+    expect(display).toContain(`**Latest E-file Object ID:** ${objectId}`);
+  });
+
+  it.each([undefined, null, '', '../schedules', '202640829349300109\n', 42])(
+    'renders an unavailable e-file when the upstream ID is %j',
+    async (objectId) => {
+      const orgFields = objectId === undefined ? {} : { latest_object_id: objectId };
+      vi.mocked(svcModule.getNonprofitExplorerService().getOrganization).mockResolvedValue(
+        makeRawOrgResponse(orgFields),
+      );
+
+      const result = await runToolContract(nonprofitGetOrganization, { ein: 530196605 });
+      expect(result.structuredContent).toMatchObject({
+        latest_object_id: null,
+        latest_full_text_url: null,
+      });
+      expect(renderText(result.content)).toContain('**Latest E-file Object ID:** Not available');
+      expect(renderText(result.content)).toContain('**Latest Full-text Filing:** Not available');
+    },
+  );
+
+  it('formats the BMF summary with its own period and computed gross receipts', () => {
+    const text = renderText(nonprofitGetOrganization.format!(makeFormatOutput()));
+    expect(text).toContain('## IRS Business Master File Summary (2025-06)');
+    expect(text).toContain('**Computed Gross Receipts (BMF):** $3,000,000');
+  });
+
   it('format renders EIN and org name', () => {
     const blocks = nonprofitGetOrganization.format!(makeFormatOutput());
     expect(blocks).toHaveLength(1);
@@ -441,17 +517,22 @@ describe('nonprofitGetOrganization', () => {
 
   it('format renders a revenue-only Business Master File summary', () => {
     const blocks = nonprofitGetOrganization.format!(
-      makeFormatOutput({ asset_amount: null, income_amount: null, revenue_amount: 2_400_000 }),
+      makeFormatOutput({
+        asset_amount: null,
+        income_amount: null,
+        revenue_amount: 2_400_000,
+        bmf_tax_period: null,
+      }),
     );
     const text = renderText(blocks);
 
     // Gating the whole section on asset/income dropped a populated revenue_amount.
-    expect(text).toContain('IRS Business Master File Summary');
+    expect(text).toContain('IRS Business Master File Summary (period not on record)');
     expect(text).toContain('**Total Revenue (BMF):** $2,400,000');
     // BMF figures are IRS-recorded, so their absence is "not on record", never the
     // org's own omission.
     expect(text).toContain('**Total Assets (BMF):** Not on record');
-    expect(text).toContain('**Total Income (BMF):** Not on record');
+    expect(text).toContain('**Computed Gross Receipts (BMF):** Not on record');
   });
 
   it('format renders sparse organization metadata rather than omitting it', () => {

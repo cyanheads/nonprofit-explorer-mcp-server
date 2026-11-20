@@ -116,6 +116,8 @@ export interface RawOrganization {
   foundation_code?: number | null;
   id?: number;
   income_amount?: number | null;
+  /** Organization-level handle for ProPublica’s newest rendered e-file. */
+  latest_object_id?: string | null;
   name?: string;
   ntee_code?: string | null;
   pf_filing_requirement_code?: number | null;
