@@ -99,12 +99,10 @@ Each step is independently testable.
 **Input schema:**
 
 ```ts
-const nteeGroups = ['A', 'B', 'CD', 'EFGH', 'IJKLMNOP', 'Q', 'RSTUVW', 'X', 'Y', 'Z'];
-
 z.object({
   query: z.string().describe(
     'Keyword search string. Searched against org name, the secondary name line, and city in order of relevance. ' +
-    'Supports: quoted phrases ("Red Cross"), required terms (+evanston), excluded terms (-dental). ' +
+    'Use +opera +seattle for terms across name and city. For a statewide search, use the quoted phrase "food bank" with state WA. Use -dental to exclude a term. ' +
     'Empty string returns all orgs within the active filters.'
   ),
   state: z.string().optional().describe(
@@ -113,15 +111,7 @@ z.object({
     'A code outside that set is rejected rather than silently returning national results. ' +
     'Restricts results to orgs headquartered in that state.'
   ),
-  ntee_category: z.enum([
-    '1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
-    ...nteeGroups.flatMap((letters) => [...letters, ...letters.toLowerCase()]),
-  ]).optional().describe(
-    'NTEE major group digit string (1–10) or case-insensitive major letter (A–Z), normalized to an upstream numbered group. ' +
-    '1=Arts/Culture/Humanities, 2=Education, 3=Environment/Animals, 4=Health, ' +
-    '5=Human Services, 6=International/Foreign Affairs, 7=Public/Societal Benefit, ' +
-    '8=Religion Related, 9=Mutual/Membership Benefit, 10=Unknown/Unclassified.'
-  ),
+  ntee_category: z.string().regex(/^(?:10|[1-9]|[A-Za-z](?:[0-9][A-Za-z0-9]{1,2})?)$/).optional(),
   subsection_code: z.enum([
     '2','3','4','5','6','7','8','9','10','11','12','13','14','15',
     '16','17','18','19','21','22','23','25','26','27','28','92',
@@ -248,10 +238,10 @@ z.object({
   zipcode: string | null;
   ntee_code: string | null;       // e.g., "E210" — health hospital
   subsection_code: number | null; // 501(c) subsection
-  ruling_date: string | null;     // ISO date of IRS recognition
-  asset_amount: number | null;    // Most recent IRS BMF total assets
-  income_amount: number | null;   // Most recent IRS BMF total income
-  revenue_amount: number | null;  // Most recent IRS BMF total revenue
+  ruling_date: string | null;     // IRS recognition month, represented as YYYY-MM-01
+  asset_amount: number | null;    // End-of-year book assets for bmf_tax_period
+  income_amount: number | null;   // Computed gross receipts for bmf_tax_period, using the IRS calculation for the form
+  revenue_amount: number | null;  // BMF total revenue for Form 990 or 990-EZ
   // IRS BMF classification, decoded as "<code> — <meaning>" (see Decision 11)
   deductible: string | null;      // deductibility_code — 1 deductible, 2 not, 4 by treaty
   exempt_status: string | null;   // exempt_organization_status_code — 1 is unconditional exemption
@@ -260,7 +250,9 @@ z.object({
   pf_filing_requirement: string | null; // IRS pf_filing_requirement_code
   affiliation: string | null;    // IRS affiliation_code; does not establish group-return inclusion
   group_exemption_number: number | null; // exemption_number; zero means none assigned
-  bmf_tax_period: string | null;  // tax_period — latest BMF return period; often newer than latest_filing
+  bmf_tax_period: string | null;  // Month ending the BMF return period, represented as YYYY-MM-01
+  latest_object_id: string | null; // Exact IRS e-file object identifier supplied by ProPublica
+  latest_full_text_url: string | null; // Check the period in this viewer before using it for a historical return
   latest_return: {
     tax_prd_yr: number | null;
     tax_prd: number | null;
@@ -330,8 +322,8 @@ z.object({
   ]).describe(
     'Employer Identification Number. Use nonprofit_search_organizations to resolve an org name to its EIN.'
   ),
-  from_year: z.number().int().optional(), // Inclusive fiscal-year lower bound
-  to_year: z.number().int().optional(),   // Inclusive fiscal-year upper bound
+  from_year: z.number().int().min(1000).max(9999).optional(),
+  to_year: z.number().int().min(1000).max(9999).optional(),
 })
 ```
 
@@ -341,6 +333,7 @@ z.object({
 {
   ein: number;
   name: string;
+  strein: string;           // Formatted EIN, including leading zeros
   from_year: number | null; // Applied inclusive bound; null means unbounded
   to_year: number | null;   // Applied inclusive bound; null means unbounded
   filings: Array<{
@@ -398,6 +391,8 @@ z.object({
   }>;
   total_filings_with_data: number; // Unfiltered count
   total_filings_pdf_only: number;  // Unfiltered count
+  years_with_data: { earliest: number; latest: number } | null;
+  years_pdf_only: { earliest: number; latest: number } | null;
   data_source: string;            // Top-level response.data_source (ProPublica + IRS attribution text)
   propublica_url: string;
 }
@@ -435,7 +430,7 @@ errors: [
 
 **Program expense ratio:**
 
-Not computed. `program_expense_ratio` is `null` on every filing, for every form type — see Decision 3. `format()` renders the section with a line stating that the split lives in Part IX of the source PDF, so a `content[]`-only client sees the same fact the null in `structuredContent` carries.
+`program_expense_ratio` stays null on every filing. Read Part IX of the relevant Form 990 for the functional allocation. Each filing keeps its own PDF link. The organization-level viewer identifies its own reporting period.
 
 **Executive compensation field mapping:**
 - `formtype: 0` (990): `compnsatncurrofcr` — total compensation of current officers, directors, trustees, and key employees
@@ -466,7 +461,7 @@ The API has only two endpoints. `nonprofit_get_organization` and `nonprofit_get_
 `nonprofit_get_organization` and `nonprofit_get_filings` both call `GET /organizations/{ein}.json`. The response contains both `organization` (profile) and `filings_with_data` (array). Splitting into two tools is correct: profile lookup and filing history are distinct agent intents. The service method fetches once; both tools call the same service method and each extract what they need. This is more honest than either forcing the agent to call one tool to get data it doesn't want, or silently including filing arrays in the profile response.
 
 **2. Normalize NTEE letters to upstream groups**
-The upstream `ntee[id]` accepts numbered groups, while organization records contain letter-prefixed NTEE codes. The server accepts digit strings `1`–`10` and major letters, then normalizes both the request and echoed filters: A→1, B→2, C–D→3, E–H→4, I–P→5, Q→6, R–W→7, X→8, Y→9, Z→10. This is a coarse sector selection, not an exact NTEE sub-code filter.
+The upstream `ntee[id]` accepts numbered groups. A full code such as `K31` selects the same group as its initial letter. The request and echoed filter use A→1, B→2, C–D→3, E–H→4, I–P→5, Q→6, R–W→7, X→8, Y→9, Z→10. Compare individual `ntee_code` values for narrower peer sets.
 
 **3. Program expense ratio: not derivable, so not derived**
 `program_expense_ratio` is `null` on every filing. `totfuncexpns` is Form 990 Part IX column (A); the program-service total is column (B), line 25 — a separately allocated column ProPublica does not return. Part IX allocates *every* expense line (occupancy, professional fees, travel, IT, insurance, depreciation, …) across program, management, and fundraising, so subtracting officer compensation, other wages, and professional fundraising fees from the column (A) total cannot reconstruct it. A live pull of the fullest filing shape the API returns (67 fields) has all three subtrahends populated and still carries no program-service figure, so the gap is structural rather than a sparse-input problem — and on a 990-EZ, which has no Part IX allocation at all, the three fields are absent entirely and the residual reported a 100% program ratio.
@@ -545,7 +540,7 @@ The form type picks the label where it decides the meaning: null `program_servic
 - **Data lag:** 990 filings are annual and IRS processing adds further delay. The most recent `tax_prd_yr` is typically 1–2 years behind the current year. The tools surface `tax_prd_yr` prominently; agents must not present these figures as current.
 - **No individual officer compensation detail:** Full-990 and PF extracts expose aggregate compensation, not named-officer pay. Read the source filing's officer section and applicable schedules; for 990-EZ, Part IV is also required for compensation absent from the extract.
 - **Incomplete filing coverage:** Form 990-N e-Postcards are outside this filing history. Other filing exemptions and coverage gaps can also leave an organization with no returns here. BMF codes contextualize the result but do not establish the cause; an unknown EIN remains `not_found`.
-- **No program expense ratio:** ProPublica's extract carries no Form 990 Part IX column (B) program-service total, so the program/management/fundraising split cannot be derived from it (see Decision 3). `program_expense_ratio` is always `null`; the split is available only by reading Part IX of the linked PDF.
+- **No program expense ratio:** ProPublica’s extract omits Form 990 Part IX column (B). Read the filing for the relevant period to recover the allocation. Use its PDF or the organization’s rendered e-file after verifying its period.
 - **No bulk search or EIN lookup list:** The API has no batch endpoint. Multiple EIN lookups require separate requests.
 - **Search results beyond 10,000 are unreachable:** ProPublica refuses any page whose result offset reaches 10,000, so pages above 399 cannot be fetched at all (see Decision 7). `nonprofit_search_organizations` reports this as `pagination_ceiling` and directs the caller to narrow the query; there is no workaround that walks past the ceiling.
-- **NTEE filter is coarse:** The integer categories (1–10) map to major NTEE groups. There's no filter for sub-codes like "E210" (hospitals within Health). Search results include `ntee_code` (full sub-code) for post-hoc filtering in the client.
+- **NTEE filter is coarse:** Digit strings `1`–`10`, major letters and full codes select major groups. To isolate an exact code such as `E210`, compare `ntee_code` on each returned organization.

@@ -43,8 +43,8 @@ IRS Form 990 data for 1.8M+ tax-exempt organizations, via the ProPublica Nonprof
 
 ### `nonprofit_search_organizations` <sub>tool</sub>
 
-- Full-text query — supports quoted phrases (`"Red Cross"`), required terms (`+evanston`), excluded terms (`-dental`)
-- Optional filters: state/territory name or postal code (including military codes and `ZZ` for foreign entities), NTEE major sector (`1`–`10` or a case-insensitive major letter), and 501(c) subsection code (`3` covers both public charities and private foundations — see `foundation_type` on `nonprofit_get_organization` to tell them apart). Names and letters normalize to the upstream codes shown in `active_filters`; unrecognized states are rejected before a request
+- For a name and city, require each term (`+opera +seattle`). For a statewide phrase search, combine `"food bank"` (including the quotes) with `state: "WA"`. A leading minus excludes a term.
+- Filter by state or territory name or postal code (including military codes and `ZZ` for foreign entities), NTEE sector, and 501(c) subsection. `ntee_category` accepts groups `1`–`10`, major letters, and full codes such as `K31`. All three forms select a major group. For narrower peers, compare each result’s `ntee_code`. `active_filters` shows the upstream codes used. Subsection `3` includes both public charities and private foundations. Use the profile’s `foundation_type` to distinguish them.
 - `sub_name` is the upstream legal name with an optional secondary line; it can repeat `name` or be null
 - Paginated at 25 per page (`page`, zero-indexed); `num_pages`, `per_page`, and `page_offset` track position
 - API caps total results at 10,000 — `total_results === 10000` means the actual count may be higher, and a page whose offset reaches that ceiling is refused (`pagination_ceiling`)
@@ -59,6 +59,8 @@ IRS Form 990 data for 1.8M+ tax-exempt organizations, via the ProPublica Nonprof
 - Returns legal identity, address, NTEE code, 501(c) type, and IRS ruling date
 - IRS Business Master File standing: deductibility (including the deductible-by-treaty case), exemption status, and public-charity vs. private-foundation classification — each decoded from its IRS code with the raw code retained
 - `latest_filing` is the latest extracted financial snapshot: revenue, expenses, assets, liabilities, net assets, and source PDF link. `latest_return` separately identifies the newest return across extracted and PDF-only histories; a newer return need not have extracted figures
+- `latest_object_id` and `latest_full_text_url` identify the newest rendered e-file when available. Read the reporting period in the viewer before using it for a historical question.
+- BMF amounts use `bmf_tax_period`. `income_amount` is the IRS computed gross-receipts measure. The BMF period and ruling date identify months, with day `01` as a placeholder.
 - Filing requirements, private-foundation filing requirements, affiliation, and group exemption number come from the IRS Business Master File. Empty-history guidance uses these codes without claiming why a particular filing is absent
 - `filing_count` counts filings with extracted data; `filing_count_pdf_only` separately counts PDFs without financial extracts. Use `nonprofit_get_filings` for those links; PDF-only histories have no financial snapshot
 - Data lags 1–2 years — `tax_prd_yr` in the snapshot is the fiscal year of the filing, not the current year
@@ -68,10 +70,10 @@ IRS Form 990 data for 1.8M+ tax-exempt organizations, via the ProPublica Nonprof
 ### `nonprofit_get_filings` <sub>tool</sub>
 
 - All Form 990 filings with extracted data, sorted by full tax period newest first — per filing: revenue, expenses, assets, liabilities, net assets, revenue breakdown (contributions, program service, investment income), and the source PDF link
-- Optional inclusive `from_year` / `to_year` bounds apply to both extracted and PDF-only histories. Totals remain unfiltered; an empty selected interval does not mean the organization has no history
+- Optional inclusive `from_year` and `to_year` take four-digit fiscal years. Omit either end for an open interval. `years_with_data` and `years_pdf_only` give the earliest and latest known years across each complete collection, even when the selected window is empty. Counts also cover the full history.
 - Financial fields follow each return's form type. For 990-PF, investment income is savings interest plus dividends and securities interest (Part I column (a), lines 3–4); both components must be extracted. It excludes capital gains, rents, and net investment income
 - 990-PF filings include `grants_paid`, `distributable_amount`, `fair_market_value_assets`, and `net_investment_income`. The distributable amount is a payout requirement, not actual payments or a compliance measure
-- `program_expense_ratio` is always `null` — ProPublica returns no Form 990 Part IX program-service expense total, so the program/management/fundraising split is only in the source PDF
+- `program_expense_ratio` is always `null`. For the functional expense allocation, read Part IX of the Form 990 for the period in question.
 - Form 990 includes other salaries and wages, payroll taxes, professional fundraising fees, and fundraising event gross, direct expenses, and net income. For 990-EZ, event gross is separate from combined gaming/fundraising expenses and net income; the combined figures cannot establish event-only results
 - Executive compensation includes the source field for 990 and 990-PF. The 990-EZ extract has no compensation source: amount and field name are null, with guidance to Part IV of the PDF
 - `filings_pdf_only` retains fiscal years and tax periods for returns without extracted data, including returns newer than the financial snapshots
@@ -181,7 +183,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.4.4](https://bun.sh/) or higher (or Node.js v24+).
 - No API key required — ProPublica Nonprofit Explorer is a keyless public API.
 
 ### Installation
@@ -220,11 +222,13 @@ All configuration is validated at startup. Key environment variables:
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http` | `stdio` |
 | `MCP_HTTP_PORT` | HTTP server port | `3010` |
 | `MCP_HTTP_HOST` | HTTP server hostname | `127.0.0.1` |
-| `MCP_HTTP_ENDPOINT_PATH` | HTTP endpoint path | `/mcp` |
-| `MCP_PUBLIC_URL` | Public origin override for TLS-terminating reverse-proxy deployments | — |
+| `MCP_HTTP_ENDPOINT_PATH` | HTTP endpoint path. A missing leading slash is supplied automatically. | `/mcp` |
+| `MCP_PUBLIC_URL` | HTTP or HTTPS origin for TLS-terminating reverse proxies | — |
 | `MCP_AUTH_MODE` | Authentication: `none`, `jwt`, or `oauth` | `none` |
+| `MCP_JWT_EXPECTED_AUDIENCE` | Required `aud` claim in JWT mode. An unset value accepts any audience and logs a startup warning. | — |
+| `MCP_JWT_EXPECTED_ISSUER` | Required `iss` claim when set. Configure it alongside the audience. | — |
 | `MCP_LOG_LEVEL` | Log level (`debug`, `info`, `warning`, `error`, etc.) | `info` |
-| `LOGS_DIR` | Directory for log files (Node.js only) | `<project-root>/logs` |
+| `LOGS_DIR` | Directory for log files (Node.js only). Relative paths are resolved from the server package root. | `<package-root>/logs` |
 | `LOG_TOOL_FAILURE_PAYLOADS` | Log each failed tool call's arguments and result, redacted by key name and capped at `LOG_TOOL_FAILURE_PAYLOAD_MAX_BYTES` (default `16384`). A secret inside a free-form value is not redacted. | `false` |
 | `STORAGE_PROVIDER_TYPE` | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv/r2/d1` | `in-memory` |
 | `OTEL_ENABLED` | Enable [OpenTelemetry instrumentation](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry) | `false` |

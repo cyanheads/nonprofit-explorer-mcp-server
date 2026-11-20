@@ -36,5 +36,5 @@ await createApp({
     initNonprofitExplorerService(core.config, core.storage);
   },
   instructions:
-    'ProPublica Nonprofit Explorer provides keyless read-only access to IRS Form 990 data on 1.8M+ tax-exempt organizations. Resolve names to EINs with nonprofit_search_organizations; use nonprofit_get_organization for the profile, latest extracted financial snapshot, and newest-return metadata, then nonprofit_get_filings for financial history and source PDF links. The newest return may be PDF-only and newer than the extracted snapshot. Filings can be selected with inclusive fiscal-year bounds; omitted bounds return the full history. Data typically lags 1–2 years: cite tax_prd_yr and distinguish the tax period from the filing date.',
+    'Resolve organization names to EINs with nonprofit_search_organizations. Use nonprofit_get_organization for the BMF record, latest extracted financial snapshot, newest listed return, and newest rendered e-file when available. Check the period printed on that e-file before citing it. Use nonprofit_get_filings for financial history and period-specific PDFs. Supply inclusive four-digit fiscal years or omit either bound. Data typically lags 1–2 years. Cite tax_prd_yr when reporting financials.',
 });
