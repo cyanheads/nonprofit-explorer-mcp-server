@@ -79,6 +79,26 @@ describe('nonprofitSearchOrganizations', () => {
     expect(result.active_filters.state).toBeNull();
   });
 
+  it('preserves the upstream formatted EIN on both surfaces', async () => {
+    mockSearch(makeRawResponse([{ ...sampleOrg, ein: 42103580, strein: '04-2103580' }]));
+    const result = await runToolContract(nonprofitSearchOrganizations, { query: 'food bank' });
+
+    expect(result.structuredContent).toMatchObject({
+      organizations: [{ ein: 42103580, strein: '04-2103580' }],
+    });
+    expect(JSON.stringify(result.content)).toContain('04-2103580');
+  });
+
+  it('formats the numeric EIN with leading zeros when the upstream formatted EIN is missing', async () => {
+    mockSearch(makeRawResponse([{ ...sampleOrg, ein: 42103580, strein: undefined }]));
+    const result = await runToolContract(nonprofitSearchOrganizations, { query: 'food bank' });
+
+    expect(result.structuredContent).toMatchObject({
+      organizations: [{ ein: 42103580, strein: '04-2103580' }],
+    });
+    expect(JSON.stringify(result.content)).toContain('04-2103580');
+  });
+
   it('surfaces upstream per_page and page_offset', async () => {
     mockSearch(makeRawResponse([sampleOrg], { cur_page: 2, page_offset: 50, total_results: 60 }));
 
@@ -102,6 +122,47 @@ describe('nonprofitSearchOrganizations', () => {
     expect(getEnrichment(ctx).notice).toContain('No organizations matched');
   });
 
+  it('forwards explicit query syntax and keeps the query in active filters', async () => {
+    const query = '  +opera   +seattle  ';
+    const search = mockSearch(makeRawResponse([sampleOrg]));
+    const result = await runToolContract(nonprofitSearchOrganizations, { query });
+
+    expect(search).toHaveBeenCalledOnce();
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({ query }), expect.anything());
+    expect(result.structuredContent).toMatchObject({ active_filters: { query } });
+  });
+
+  it.each(['opera seattle', '  opera\n seattle  '])(
+    'includes required-term guidance on both response surfaces for %j',
+    async (query) => {
+      mockSearch(makeRawResponse([], { num_pages: 0 }));
+      const result = await runToolContract(nonprofitSearchOrganizations, { query });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toMatchObject({
+        organizations: [],
+        total_results: 0,
+        notice: expect.stringContaining('Prefix each word with +'),
+      });
+      expect(JSON.stringify(result.content)).toContain('Prefix each word with');
+      expect(JSON.stringify(result.content)).toContain('check the spelling');
+    },
+  );
+
+  it.each(['', '  ', 'opera', '+opera +seattle', 'opera -seattle', '"food bank"'])(
+    'omits required-term guidance for %j',
+    async (query) => {
+      mockSearch(makeRawResponse([], { num_pages: 0 }));
+      const result = await runToolContract(nonprofitSearchOrganizations, { query });
+
+      expect(result.structuredContent).toMatchObject({
+        notice: expect.stringContaining('check the spelling'),
+      });
+      expect(JSON.stringify(result.structuredContent)).not.toContain('Prefix each word');
+      expect(JSON.stringify(result.content)).not.toContain('Prefix each word');
+    },
+  );
+
   it('returns an exhausted page as a success naming the last valid page', async () => {
     mockSearch(
       makeRawResponse([], {
@@ -113,7 +174,10 @@ describe('nonprofitSearchOrganizations', () => {
     );
 
     const ctx = createMockContext({ errors: nonprofitSearchOrganizations.errors });
-    const input = nonprofitSearchOrganizations.input.parse({ query: 'hospital', page: 245 });
+    const input = nonprofitSearchOrganizations.input.parse({
+      query: 'hospital seattle',
+      page: 245,
+    });
     const result = await nonprofitSearchOrganizations.handler(input, ctx);
 
     expect(result.organizations).toEqual([]);
@@ -122,6 +186,7 @@ describe('nonprofitSearchOrganizations', () => {
     expect(notice).toContain('past the end');
     expect(notice).toContain('244');
     expect(notice).not.toContain('No organizations matched');
+    expect(notice).not.toContain('Prefix each word');
   });
 
   it('leaves a populated page free of a notice', async () => {

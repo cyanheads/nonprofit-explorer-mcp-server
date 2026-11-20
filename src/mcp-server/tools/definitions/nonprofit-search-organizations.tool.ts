@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import {
+  formatEin,
   getNonprofitExplorerService,
   normalizeStateCode,
   SEARCH_RESULT_CEILING,
@@ -29,14 +30,14 @@ const NTEE_GROUPS = ['A', 'B', 'CD', 'EFGH', 'IJKLMNOP', 'Q', 'RSTUVW', 'X', 'Y'
 export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations', {
   title: 'Search Nonprofits',
   description:
-    'Search 1.8M+ IRS-recognized tax-exempt organizations by name, keyword, city, or phrase. Optionally narrow by US state, NTEE major sector (1–10), or 501(c) subsection type. Returns EINs — pass them to nonprofit_get_organization or nonprofit_get_filings for details. Results are paginated at 25 per page; use the page parameter and num_pages to paginate. Total results cap at 10,000 in the API; if total_results === 10000 the actual count may be higher. A zero-match query and a page past the last one both return an empty organizations array with a notice rather than an error; only a page whose offset reaches that 10,000 cap is refused. Supports quoted phrases ("Red Cross"), required terms (+evanston), excluded terms (-dental). Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
+    'Search 1.8M+ IRS-recognized tax-exempt organizations by name, keyword, city, or phrase. For a name-and-city search, prefix each word with + (e.g., "+opera +seattle"). Optionally narrow by US state, NTEE major sector (1–10), or 501(c) subsection type. Returns EINs — pass them to nonprofit_get_organization or nonprofit_get_filings for details. Results are paginated at 25 per page; use the page parameter and num_pages to paginate. Total results cap at 10,000 in the API; if total_results === 10000 the actual count may be higher. A zero-match query and a page past the last one both return an empty organizations array with a notice rather than an error; only a page whose offset reaches that 10,000 cap is refused. Data from ProPublica Nonprofit Explorer, sourced from IRS Form 990 filings.',
   annotations: { readOnlyHint: true },
 
   input: z.object({
     query: z
       .string()
       .describe(
-        'Keyword search string. Searched against org name, the secondary name line, and city in order of relevance. Supports: quoted phrases ("Red Cross"), required terms (+evanston), excluded terms (-dental). Empty string returns all orgs within the active filters.',
+        'Searches organization name, secondary name line, and city. Plain words can miss matches across fields. Prefix each word with + for name-and-city searches (e.g., "+opera +seattle"). Use quotes for an exact phrase (e.g., query \'"food bank"\' with state "WA" for a statewide search), and - to exclude terms (e.g., "-dental"). Empty string returns all organizations within the active filters.',
       ),
     state: z
       .string()
@@ -45,22 +46,14 @@ export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations
         'US state or territory name (e.g., "Washington", "Puerto Rico") or two-letter state, territory, or military postal code. Trimmed and case-insensitive; normalized to a postal code before filtering. Unrecognized values are rejected. Restricts results to headquarters in that state. "ZZ" accepts foreign addresses, though no organization in the index currently carries it.',
       ),
     ntee_category: z
-      .enum([
-        '1',
-        '2',
-        '3',
-        '4',
-        '5',
-        '6',
-        '7',
-        '8',
-        '9',
-        '10',
-        ...NTEE_GROUPS.flatMap((letters) => [...letters, ...letters.toLowerCase()]),
-      ])
+      .string()
+      .regex(/^(?:[1-9]|10|[A-Za-z](?:[0-9][A-Za-z0-9]{1,2})?)$/, {
+        error:
+          'Use a group number string from "1" to "10", a single letter, or a three- or four-character NTEE code starting with a letter and a digit, such as "K31" or "A6AI".',
+      })
       .optional()
       .describe(
-        'NTEE major group digit string (1–10) or case-insensitive major letter: A→1 Arts/Culture/Humanities, B→2 Education, C–D→3 Environment/Animals, E–H→4 Health, I–P→5 Human Services, Q→6 International/Foreign Affairs, R–W→7 Public/Societal Benefit, X→8 Religion Related, Y→9 Mutual/Membership Benefit, Z→10 Unknown/Unclassified. Requests and active_filters use the numbered group.',
+        'NTEE group number string (1–10), case-insensitive major letter, or full code (e.g., "K31" or "A6AI"). The first letter selects the entire group: A→1 Arts/Culture/Humanities, B→2 Education, C–D→3 Environment/Animals, E–H→4 Health, I–P→5 Human Services, Q→6 International/Foreign Affairs, R–W→7 Public/Societal Benefit, X→8 Religion Related, Y→9 Mutual/Membership Benefit, Z→10 Unknown/Unclassified. active_filters echoes the group number and each result carries its own ntee_code.',
       ),
     subsection_code: z
       .enum([
@@ -253,9 +246,11 @@ export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations
       state = normalized;
     }
 
-    const category = input.ntee_category?.toUpperCase();
+    const majorLetter = input.ntee_category?.[0]?.toUpperCase();
     const letterGroup =
-      category === undefined ? -1 : NTEE_GROUPS.findIndex((letters) => letters.includes(category));
+      majorLetter === undefined
+        ? -1
+        : NTEE_GROUPS.findIndex((letters) => letters.includes(majorLetter));
     const ntee_category = letterGroup === -1 ? input.ntee_category : String(letterGroup + 1);
 
     ctx.log.info('Searching nonprofits', {
@@ -286,16 +281,19 @@ export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations
     const lastPage = numPages - 1;
     const segments: string[] = [];
 
-    if (orgs.length === 0) {
+    if (orgs.length === 0 && total === 0) {
+      segments.push(`No organizations matched query="${input.query}" with the active filters.`);
+      if (!/["“”]|(?:^|\s)[+-]/u.test(input.query) && /^\s*\S+\s+\S/u.test(input.query)) {
+        segments.push(
+          'Prefix each word with + to require it across search fields (e.g., +opera +seattle).',
+        );
+      }
       segments.push(
-        total === 0
-          ? `No organizations matched query="${input.query}" with the active filters. ` +
-              'Broaden the query, drop the state, ntee_category, or subsection_code filter, or check the spelling.'
-          : `Page ${curPage} is past the end of this result set: ${plural(total, 'match', 'matches')} span ` +
-              `${plural(numPages, 'page')}, so the last page is ${lastPage}. ` +
-              (numPages === 1
-                ? 'Re-request with page 0.'
-                : `Re-request with a page in 0–${lastPage}.`),
+        'Broaden the query, drop the state, ntee_category, or subsection_code filter, or check the spelling.',
+      );
+    } else if (orgs.length === 0) {
+      segments.push(
+        `Page ${curPage} is past the end of this result set: ${plural(total, 'match', 'matches')} span ${plural(numPages, 'page')}, so the last page is ${lastPage}. ${numPages === 1 ? 'Re-request with page 0.' : `Re-request with a page in 0–${lastPage}.`}`,
       );
     }
 
@@ -317,7 +315,7 @@ export const nonprofitSearchOrganizations = tool('nonprofit_search_organizations
       page_offset: raw.page_offset ?? 0,
       organizations: orgs.map((o) => ({
         ein: o.ein,
-        strein: o.strein ?? String(o.ein),
+        strein: o.strein ?? formatEin(o.ein),
         name: o.name ?? '',
         sub_name: o.sub_name ?? null,
         city: o.city ?? null,

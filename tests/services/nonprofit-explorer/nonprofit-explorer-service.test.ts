@@ -644,6 +644,12 @@ describe('NonprofitExplorerService.search — state filter', () => {
     ['X', '8'],
     ['Y', '9'],
     ['Z', '10'],
+    ['K31', '5'],
+    ['K31Z', '5'],
+    ['P210', '5'],
+    ['E210', '4'],
+    ['A6A', '1'],
+    ['A6AI', '1'],
     ...Array.from({ length: 10 }, (_, i) => [String(i + 1), String(i + 1)]),
   ])('sends and echoes NTEE %s as canonical group %s', async (alias, group) => {
     http.route({ match: SEARCH_URL, respond: () => Response.json(populatedPage) });
@@ -744,7 +750,7 @@ describe('NonprofitExplorerService.search — state filter', () => {
     },
   );
 
-  it.each(['0', '11', 'AA', 'P210', 'constructor'])(
+  it.each(['0', '11', 'AA', 'K3', 'K310Z', 'food', 'K31\n', 'K31\nA6AI', 'constructor'])(
     'rejects invalid NTEE %s before fetching',
     async (ntee_category) => {
       const result = await runToolContract(nonprofitSearchOrganizations, {
@@ -752,6 +758,16 @@ describe('NonprofitExplorerService.search — state filter', () => {
         ntee_category,
       });
       expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          code: JsonRpcErrorCode.InvalidParams,
+          data: {
+            reason: 'invalid_arguments',
+            recovery: { hint: expect.stringContaining('three- or four-character NTEE code') },
+          },
+        },
+      });
+      expect(JSON.stringify(result.content)).toContain('three- or four-character NTEE code');
       expect(http.calls).toHaveLength(0);
     },
   );
