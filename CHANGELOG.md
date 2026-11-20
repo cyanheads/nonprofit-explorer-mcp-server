@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.4.0](changelog/0.4.x/0.4.0.md) — 2026-11-20 · ⚠️ Breaking
+
+Find nonprofit e-files, see the fiscal years on record, and search by full NTEE code.
+
 ## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-11-03 · ⚠️ Breaking
 
 Distinguish filing coverage and form-specific financials for nonprofit diligence.
